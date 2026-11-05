@@ -5,7 +5,7 @@ ifndef BUILDDIR
 endif
 
 all: create_build_dir $(BUILDDIR)/injector $(BUILDDIR)/fileadder \
-	$(BUILDDIR)/crc_calculator $(BUILDDIR)/imagebuilder
+	$(BUILDDIR)/crc_calculator $(BUILDDIR)/imagebuilder $(BUILDDIR)/poe_extract
 
 create_build_dir:
 	mkdir -p $(BUILDDIR)
@@ -24,3 +24,7 @@ $(BUILDDIR)/crc_calculator: crc_calculator.c
 
 $(BUILDDIR)/imagebuilder: imagebuilder.c
 	gcc $^ $(CCFLAGS) $@
+
+$(BUILDDIR)/poe_extract: poe_extract.c
+	gcc $^ $(CCFLAGS) $@
+
