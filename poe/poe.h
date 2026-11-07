@@ -55,6 +55,9 @@ extern __xdata uint8_t  poe_st_volt;	// port voltage, volts
 extern __xdata uint16_t poe_st_ma;	// port current, mA
 void poe_get_port(void) __banked;
 
+/* `poe show`: per-port table from poe_get_port() */
+void poe_show(void) __banked;
+
 #endif /* POE_PRESENT */
 
 #endif

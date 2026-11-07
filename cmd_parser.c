@@ -1875,6 +1875,8 @@ static void parse_poe(void)
 		} else {
 			goto err;
 		}
+	} else if (cmd_compare(1, "show")) {
+		poe_show();
 	} else if (cmd_compare(1, "global")) {
 		// Enable/disable ALL ports at once: `poe global <on|off>`.
 		if (!cmd_compare(2, "on") && !cmd_compare(2, "off"))
@@ -1886,7 +1888,7 @@ static void parse_poe(void)
 	return;
 
 err:
-	cmd_error("poe load|port <n> <on|off>|global <on|off>\n");
+	cmd_error("poe load|show|port <n> <on|off>|global <on|off>\n");
 #else
 	print_string("PoE not supported on this machine\n");
 #endif /* POE_PRESENT */
