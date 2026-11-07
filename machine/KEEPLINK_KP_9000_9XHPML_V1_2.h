@@ -4,4 +4,6 @@
 #define MACHINE_MODEL "keepLink KP-9000-9XHPML V1.2"
 #define MACHINE_CHIPSET RTL8373
 
+#define MACHINE_POE_CHIP RTL8238C
+
 #endif
