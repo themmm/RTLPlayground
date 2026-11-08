@@ -35,14 +35,19 @@ __xdata uint16_t idx;
 #define IGMP_IP_HDR		offsetof(struct igmp_pkt, hlen)
 #define IGMP_IP_IHL		0x0f
 #define IGMP_GROUP_OFS		4
+#define IGMP_V3_NREC_OFS	6
 #define IGMP_V3_RECORD_OFS	8
+#define IGMP_V3_RECORD_LEN	8
+#define IGMP_V3_AUXLEN_OFS	1
+#define IGMP_V3_NSRC_OFS	2
 
-static __xdata uint8_t igmp_grp;
+static __xdata uint16_t igmp_grp;
 static __xdata uint8_t igmp_join;
 static __xdata uint16_t igmp_len;
 static __xdata uint16_t igmp_router_ports;	// Ports a query came in on
 
 static void igmp_group_update(void);
+static void igmp_v3_report(void);
 static void igmp_forward(void);
 
 #ifdef IPMC_USES_L3MC
@@ -245,14 +250,8 @@ uint8_t igmp_packet_handler(void) __banked
 		igmp_join = 0;
 		break;
 	case IGMP_V3_REPORT:
-		igmp_grp += IGMP_V3_RECORD_OFS;
-		if (uip_buf[igmp_grp] == IGMP_V3_TO_EXCLUDE)
-			igmp_join = 1;
-		else if (uip_buf[igmp_grp] == IGMP_V3_TO_INCLUDE)
-			igmp_join = 0;
-		else
-			goto forward;
-		break;
+		igmp_v3_report();
+		goto forward;
 	default:
 		goto forward;
 	}
@@ -264,6 +263,49 @@ uint8_t igmp_packet_handler(void) __banked
 forward:
 	igmp_forward();
 	return 1;
+}
+
+
+/*
+ * Goes through the group records of the IGMPv3 report at igmp_grp: puts the
+ * port the packet came in on into the group of each MODE_IS_EXCLUDE and
+ * CHANGE_TO_EXCLUDE record, takes it out of that of each CHANGE_TO_INCLUDE
+ * record, and passes over the others. A record that does not end within the
+ * IP packet ends the walk.
+ */
+static void igmp_v3_report(void)
+{
+	// In XRAM: this function calls on, so its locals would take internal RAM from the stack
+	__xdata uint16_t records = ((uint16_t)uip_buf[igmp_grp + IGMP_V3_NREC_OFS] << 8) | uip_buf[igmp_grp + IGMP_V3_NREC_OFS + 1];
+	__xdata uint16_t last = IGMP_IP_HDR + HTONS(IGMP_I->len);  // Not the frame: it may be padded
+	__xdata uint16_t left, words;
+	__xdata uint8_t type;
+
+	if (last > igmp_len)
+		last = igmp_len;
+	last -= IGMP_V3_RECORD_LEN;	// Where a record header can start at the latest
+	igmp_grp += IGMP_V3_RECORD_OFS;
+	while (records--) {
+		if (igmp_grp > last)
+			return;
+		// Sources and aux data are 32-bit words and have to end within the packet;
+		// the sources are checked before the aux length is added, so the sum cannot wrap
+		left = (last - igmp_grp) >> 2;
+		words = ((uint16_t)uip_buf[igmp_grp + IGMP_V3_NSRC_OFS] << 8) | uip_buf[igmp_grp + IGMP_V3_NSRC_OFS + 1];
+		if (words > left)
+			return;
+		words += uip_buf[igmp_grp + IGMP_V3_AUXLEN_OFS];
+		if (words > left)
+			return;
+		type = uip_buf[igmp_grp];
+		if (type == IGMP_V3_IS_EXCLUDE || type == IGMP_V3_TO_EXCLUDE || type == IGMP_V3_TO_INCLUDE) {
+			igmp_join = type != IGMP_V3_TO_INCLUDE;
+			igmp_grp += IGMP_GROUP_OFS;
+			igmp_group_update();
+			igmp_grp -= IGMP_GROUP_OFS;
+		}
+		igmp_grp += IGMP_V3_RECORD_LEN + (words << 2);
+	}
 }
 
 

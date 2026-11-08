@@ -28,13 +28,14 @@ void print_sfr_data(void) { }
 
 /* ---- trapped frames, laid out byte by byte ---- */
 
-#define IGMP_V3_IS_EXCLUDE	2
 #define IGMP_V3_ALLOW_NEW	5
 #define IP_OPT_ROUTER_ALERT	0x94
 #define IP_HDR			22	/* MACs, CPU tag, EtherType */
 
 static const uint8_t grp_a[4]    = { 239, 255, 255, 250 };	/* SSDP */
 static const uint8_t grp_b[4]    = { 239, 1, 2, 3 };
+static const uint8_t grp_c[4]    = { 239, 9, 9, 9 };
+static const uint8_t grp_d[4]    = { 239, 8, 8, 8 };
 static const uint8_t grp_mdns[4] = { 224, 0, 0, 251 };
 static const uint8_t all_hosts[4] = { 224, 0, 0, 1 };
 static const uint8_t v3_routers[4] = { 224, 0, 0, 22 };
@@ -81,12 +82,44 @@ static void trap_igmp(uint8_t port, uint8_t type, const uint8_t group[4], const 
 	trap(port, dst, plain, m, sizeof(m));
 }
 
+/* IGMPv3 reports, built up record by record: v3_report() starts one that
+ * announces `records` records, v3_record() adds one, trap_v3_report() traps it */
+static uint8_t  v3_msg[UIP_CONF_BUFFER_ALLOC_SIZE];
+static uint16_t v3_len;
+
+static void v3_report(uint16_t records)
+{
+	memset(v3_msg, 0, sizeof(v3_msg));
+	v3_msg[0] = IGMP_V3_REPORT;
+	v3_msg[6] = records >> 8; v3_msg[7] = records;
+	v3_len = 8;
+}
+
+/* A group record with `nsrc` sources and `aux` words of auxiliary data. These
+ * words take turns at looking like a record header for MODE_IS_EXCLUDE and
+ * like grp_b, so a handler that takes them for a record learns grp_b. */
+static void v3_record(uint8_t rtype, const uint8_t group[4], uint16_t nsrc, uint8_t aux)
+{
+	static const uint8_t fill[8] = { IGMP_V3_IS_EXCLUDE, 0, 0, 0, 239, 1, 2, 3 };
+	uint8_t *r = v3_msg + v3_len;
+	r[0] = rtype; r[1] = aux; r[2] = nsrc >> 8; r[3] = nsrc;
+	memcpy(r + 4, group, 4);
+	v3_len += 8;
+	for (uint16_t i = 0; i < nsrc + aux; i++, v3_len += 4)
+		memcpy(v3_msg + v3_len, fill + (i & 1) * 4, 4);
+}
+
+static void trap_v3_report(uint8_t port)
+{
+	trap(port, v3_routers, false, v3_msg, v3_len);
+}
+
 /* An IGMPv3 report with one group record and no sources */
 static void trap_v3(uint8_t port, uint8_t rtype, const uint8_t group[4])
 {
-	uint8_t m[16] = { IGMP_V3_REPORT, 0, 0, 0, 0, 0, 0, 1, rtype, 0, 0, 0 };
-	memcpy(m + 12, group, 4);
-	trap(port, v3_routers, false, m, sizeof(m));
+	v3_report(1);
+	v3_record(rtype, group, 0, 0);
+	trap_v3_report(port);
 }
 
 /* ---- running the handler ---- */
@@ -265,6 +298,125 @@ static void t_v3(void)
 	CHECK(handled == 1 && hw_l2_count() == 0, "other record types are taken and ignored");
 }
 
+static void t_v3_records(void)
+{
+	printf("[test] an IGMPv3 answer to a query: several records, mDNS first\n");
+	reset();
+	v3_report(3);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_mdns, 0, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 0, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_c, 0, 0);
+	trap_v3_report(3);
+	handle();
+	CHECK(handled == 1, "taken");
+	CHECK(members(grp_a) == P(3), "MODE_IS_EXCLUDE in the second record puts the ingress port in");
+	CHECK(members(grp_c) == P(3), "the third record too");
+	CHECK(hw_l2_count() == 2, "224.0.0.251 stays out");
+	CHECK(sent_to() == (vlan1 & ~P(3)), "the report is sent on once, unchanged");
+
+	v3_report(2);
+	v3_record(IGMP_V3_TO_EXCLUDE, grp_mdns, 0, 0);
+	v3_record(IGMP_V3_TO_INCLUDE, grp_a, 0, 0);
+	trap_v3_report(3);
+	handle();
+	CHECK(hw_ipmc_find(grp_a) == 0, "CHANGE_TO_INCLUDE in a later record takes it out");
+	CHECK(members(grp_c) == P(3), "and leaves the other group alone");
+}
+
+static void t_v3_sources(void)
+{
+	printf("[test] IGMPv3 records with sources and auxiliary data are passed over whole\n");
+	reset();
+	v3_report(4);
+	v3_record(IGMP_V3_ALLOW_NEW, grp_mdns, 2, 1);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 3, 0);
+	v3_record(IGMP_V3_TO_INCLUDE, grp_c, 0, 2);
+	v3_record(IGMP_V3_TO_EXCLUDE, grp_d, 1, 1);
+	trap_v3_report(5);
+	handle();
+	CHECK(members(grp_a) == P(5), "the record behind sources and aux data is read");
+	CHECK(members(grp_d) == P(5), "the last one too");
+	CHECK(hw_ipmc_find(grp_b) == 0, "no source or aux word is taken for a record");
+	CHECK(hw_l2_count() == 2, "nothing else is learned");
+	CHECK(sent_to() == (vlan1 & ~P(5)), "the report is sent on unchanged");
+
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_ALLOW_NEW, grp_mdns, 60, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 0, 0);
+	trap_v3_report(5);	/* the second record starts at byte 302 of the frame */
+	handle();
+	CHECK(members(grp_a) == P(5) && hw_l2_count() == 1, "a record beyond byte 255 of the frame is learned");
+}
+
+static void t_v3_truncated(void)
+{
+	printf("[test] an IGMPv3 report whose records run past the end of the packet\n");
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_mdns, 0, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 2, 0);
+	trap_v3_report(2);
+	uip_len -= 4;
+	handle();
+	CHECK(handled == 1, "taken");
+	CHECK(hw_l2_count() == 0, "a record whose sources are cut off makes no entry");
+	CHECK(sent_to() == (vlan1 & ~P(2)), "the report is still sent on");
+
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 0, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_d, 0, 0);
+	trap_v3_report(2);
+	uip_len -= 1;
+	handle();
+	CHECK(members(grp_a) == P(2), "the records before the cut are learned");
+	CHECK(hw_l2_count() == 1, "a record missing the last byte of its header is not");
+
+	reset();
+	v3_report(1);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 1, 2);
+	trap_v3_report(2);
+	uip_len -= 4;
+	handle();
+	CHECK(hw_l2_count() == 0, "a record whose aux data is cut off makes no entry");
+
+	/* A report that announces two records but carries one; the frame is
+	 * padded behind the IP packet with bytes that look like the second. */
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 0, 0);
+	trap_v3_report(2);
+	memcpy(uip_buf + uip_len, (const uint8_t[8]){ IGMP_V3_IS_EXCLUDE, 0, 0, 0, 239, 9, 9, 9 }, 8);
+	uip_len += 10;
+	handle();
+	CHECK(members(grp_a) == P(2), "the record within the IP packet is learned");
+	CHECK(hw_ipmc_find(grp_c) == 0, "the Ethernet padding behind it is not read as a record");
+
+	/* The first record claims 375 sources, which would end 2 bytes behind
+	 * uip_buf (Ethernet and CPU tag, IP header with Router Alert, report
+	 * header, record header, sources); the bytes after its header look like
+	 * a record for grp_a. */
+	/* 65535 sources and one aux word would wrap a 16-bit count to 0 */
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_c, 0, 1);
+	v3_msg[8 + 2] = 0xff; v3_msg[8 + 3] = 0xff;
+	trap_v3_report(2);
+	handle();
+	CHECK(hw_l2_count() == 0, "a record with 65535 sources ends the walk");
+
+	_Static_assert(IP_HDR + 24 + 8 + 8 + 375 * 4 == sizeof(uip_buf) + 2, "375 sources end behind uip_buf");
+	reset();
+	v3_report(2);
+	v3_record(IGMP_V3_ALLOW_NEW, grp_mdns, 0, 0);
+	v3_record(IGMP_V3_IS_EXCLUDE, grp_a, 0, 0);
+	v3_msg[8 + 2] = 375 >> 8; v3_msg[8 + 3] = 375 & 0xff;
+	trap_v3_report(2);
+	handle();
+	CHECK(handled == 1 && hw_l2_count() == 0, "a record count of sources beyond the packet ends the walk");
+}
+
 static void t_local_net(void)
 {
 	printf("[test] groups in 224.0.0.0/24 stay out of the table\n");
@@ -405,6 +557,9 @@ int main(void)
 	t_groups_apart();
 	t_leave_unknown();
 	t_v3();
+	t_v3_records();
+	t_v3_sources();
+	t_v3_truncated();
 	t_local_net();
 	t_query();
 	t_not_igmp();

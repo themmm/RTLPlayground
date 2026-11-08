@@ -19,8 +19,8 @@ management by the switch), the current software does not implement managing IPv6
 Instead, all IPv6 Multicast pakets will be flooded to all ports, just as an unmanaged
 switch would do.
 
-The current software support works by trapping IGMP packets (only v3 supported, which
-is used in the vast majority of today's networks) to the CPU of the switch which will
+The current software support works by trapping IGMP packets (IGMPv1, v2 and v3, the
+latter used in the vast majority of today's networks) to the CPU of the switch which will
 update the L3 and L2 switching tables to include switch ports in a stream or remove
 them. This trapping to the CPU is also called IGMP snooping. While there is support
 in the HW to handle IGMP/MLD packets (v3 has only limited support) entirely in hardware
@@ -86,8 +86,12 @@ forwarding by `igmp_packet_handler()` does not use it (see Router ports below).
 `igmp_packet_handler()` implements handling of trapped IGMP packets by the CPU. It is
 called for frames to 01:00:5e:xx:xx:xx and returns 0 when the frame is not a trapped IGMP
 packet, so that it is passed on to the IP stack. IGMPv1/v2 reports (0x12, 0x16) join the
-group given in the IGMP header, IGMPv2 leaves (0x17) leave it, IGMPv3 reports use the first
-group record (type 4 joins, type 3 leaves). Trapped IGMP frames arrive without a VLAN tag.
+group given in the IGMP header, IGMPv2 leaves (0x17) leave it. In IGMPv3 reports every
+group record counts: MODE_IS_EXCLUDE (2, a host's answer to a query) and CHANGE_TO_EXCLUDE
+(4) join, CHANGE_TO_INCLUDE (3) leaves, other record types are passed over. The records are
+read up to the first one that does not end within the IP packet. Source lists are not
+looked at: a join counts for all sources, and a host that joins with INCLUDE records only
+(source-specific multicast) is not learned. Trapped IGMP frames arrive without a VLAN tag.
 The packet's VLAN is the PVID of its ingress port. After learning, the handler sends the
 packet on to the other members of that VLAN: a query to all of them, a report or leave to
 the router ports among them, or to all of them while the VLAN has none (see Router ports
