@@ -91,12 +91,17 @@ group record counts: MODE_IS_EXCLUDE (2, a host's answer to a query) and CHANGE_
 (4) join, CHANGE_TO_INCLUDE (3) leaves, other record types are passed over. The records are
 read up to the first one that does not end within the IP packet. Source lists are not
 looked at: a join counts for all sources, and a host that joins with INCLUDE records only
-(source-specific multicast) is not learned. Trapped IGMP frames arrive without a VLAN tag.
-The packet's VLAN is the PVID of its ingress port. After learning, the handler sends the
-packet on to the other members of that VLAN: a query to all of them, a report or leave to
-the router ports among them, or to all of them while the VLAN has none (see Router ports
-below). The CPU tag of the frame names these ports and disables learning, so the switch
-does not learn the host's MAC address on the CPU port.
+(source-specific multicast) is not learned. A trapped IGMP frame arrives in the format it
+came in with: behind the CPU tag it carries an 802.1Q tag if it came in tagged. The
+packet's VLAN is that of the tag, or the PVID of the ingress port for an untagged or
+priority-tagged frame; a packet tagged with a VLAN its ingress port is not a member of goes
+nowhere. After learning, the handler sends the packet on to the other members of that VLAN:
+a query to all of them, a report or leave to the router ports among them, or to all of them
+while the VLAN has none (see Router ports below). The frame goes out with an 802.1Q tag of
+the VLAN behind the CPU tag, so the switch tags or untags it on each port by the VLAN's
+rules; the CPU tag names the ports and disables learning, so the switch does not learn the
+host's MAC address on the CPU port. The group table stays without VLAN: a join opens the
+group on that port for every VLAN (see Differences from RFC 4541 below).
 Reports for groups in 224.0.0.0/24 are ignored: the switch floods that block
 even with IGMP on, and an entry for a group such as 224.0.0.251 (mDNS) would
 otherwise limit it to the ports that reported it, as RFC 4541 warns against.
@@ -134,6 +139,10 @@ Without a querier it does not get it until it joins anew.
   (`LOOKUP_MISS_DROP`). A multicast router behind a router port therefore gets only the
   groups it joined itself. If one is needed: the lookup-miss action "to router port" (11,
   see `igmp_setup()`) together with `RTL837X_IGMP_ROUTER_PORT`, untested.
+- **Group table without VLAN.** The entries are L3 entries (group and source address)
+  and have no VLAN. A join in one VLAN opens the group on that port for traffic to the same
+  group address in every VLAN. That traffic stays in its own VLAN: it leaves the port only
+  if the port is a member of that VLAN. IGMP itself is sent on within its VLAN only.
 
 ## When ageing is needed
 Without ageing, a port that no longer wants a group still gets its traffic. That costs

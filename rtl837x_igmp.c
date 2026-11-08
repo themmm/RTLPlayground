@@ -15,6 +15,7 @@
 #include "rtl837x_regs.h"
 #include "rtl837x_igmp.h"
 #include "rtl837x_port.h"
+#include "rtl837x_trap.h"
 #include "machine.h"
 
 extern __code const struct machine machine;
@@ -45,6 +46,7 @@ static __xdata uint16_t igmp_grp;
 static __xdata uint8_t igmp_join;
 static __xdata uint16_t igmp_len;
 static __xdata uint16_t igmp_router_ports;	// Ports a query came in on
+static __xdata uint16_t igmp_vlan;		// VLAN of the packet, 0 until known
 
 static void igmp_group_update(void);
 static void igmp_v3_report(void);
@@ -101,6 +103,10 @@ struct igmp_pkt {
 };
 #define IGMP_I ((__xdata struct igmp_pkt *)&uip_buf[0])
 #define IGMP_O ((__xdata struct igmp_pkt *)&uip_buf[RTL_FRAME_DESC_SIZE])
+// The packet behind an 802.1Q tag, from its EtherType on, and that tag
+#define IGMP_Q ((__xdata struct igmp_pkt *)&uip_buf[VLAN_TAG_SIZE])
+#define IGMP_TAG_I ((__xdata struct vlan_tag *)&uip_buf[TRAP_RX_HDR_SIZE])
+#define IGMP_TAG_O ((__xdata struct vlan_tag *)&uip_buf[RTL_FRAME_DESC_SIZE + TRAP_RX_HDR_SIZE])
 
 
 void igmp_setup(void) __banked
@@ -223,6 +229,15 @@ void entry_to_l2mc(void)
 
 uint8_t igmp_packet_handler(void) __banked
 {
+	igmp_vlan = 0;
+	if (TRAP_RX_BODY() != TRAP_RX_HDR_SIZE
+	    && IGMP_Q->ipv4_tag == HTONS(UIP_ETHTYPE_IP) && IGMP_Q->protocol == IGMP_PROTO) {
+		// Take the tag out, so the packet sits where it does in an untagged frame
+		igmp_vlan = NTOHS(IGMP_TAG_I->vlan) & 0x0fff;
+		uip_len -= VLAN_TAG_SIZE;
+		for (uint16_t i = TRAP_RX_HDR_SIZE; i < uip_len; i++)
+			uip_buf[i] = uip_buf[i + VLAN_TAG_SIZE];
+	}
 	if (IGMP_I->ipv4_tag != HTONS(UIP_ETHTYPE_IP) || IGMP_I->protocol != IGMP_PROTO)
 		return 0;
 	// What is sent out is decided by igmp_forward()
@@ -468,10 +483,13 @@ static void igmp_group_update(void)
 
 
 /*
- * Sends the trapped IGMP packet on to the other ports of the VLAN it came in on:
- * a query to all of them, a report or leave to those of them a query came in on,
- * or to all of them while no query has come in on any. The port a query came in
- * on is remembered as a router port.
+ * Sends the trapped IGMP packet on to the other ports of its VLAN, the one of
+ * the 802.1Q tag it came in with or else the PVID of its ingress port, if that
+ * port is a member of it: a query to all of them, a report or leave to those
+ * of them a query came in on, or to all of them while no query has come in on
+ * any. The port a query came in on is remembered as a router port. The frame
+ * goes out with an 802.1Q tag of that VLAN, so the switch tags or untags it on
+ * each port by the VLAN's rules.
  */
 static void igmp_forward(void)
 {
@@ -479,23 +497,32 @@ static void igmp_forward(void)
 	uint8_t query = uip_buf[IGMP_IP_HDR + ((IGMP_I->hlen & IGMP_IP_IHL) << 2)] == IGMP_QUERY;
 	uint16_t pmask;
 
+	if (!igmp_vlan)
+		igmp_vlan = port_pvid_get(port);
+	vlan_get(igmp_vlan);
+	pmask = ((((uint16_t)sfr_data[2]) << 8) | sfr_data[3]) & PMASK_9;
+	if (!(pmask & PORT_BIT(port)))	// A tag of a VLAN the port is not in
+		return;
 	if (query)
 		igmp_router_ports |= PORT_BIT(port);
-	vlan_get(port_pvid_get(port));
-	pmask = ((((uint16_t)sfr_data[2]) << 8) | sfr_data[3]) & PMASK_9;
 	if (!query && (pmask & igmp_router_ports))
 		pmask &= igmp_router_ports;
 	pmask &= ~PORT_BIT(port);
-	if (!pmask || igmp_len > UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE)
+	if (!pmask || igmp_len > UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE - VLAN_TAG_SIZE)
 		return;
 
-	// Make room for the TX frame descriptor in front of the frame
-	for (uint16_t i = igmp_len; i--;)
+	// Make room for the TX frame descriptor in front of the frame and for the
+	// 802.1Q tag behind the CPU tag
+	for (uint16_t i = igmp_len; i-- > TRAP_RX_HDR_SIZE;)
+		uip_buf[i + RTL_FRAME_DESC_SIZE + VLAN_TAG_SIZE] = uip_buf[i];
+	for (uint8_t i = offsetof(struct igmp_pkt, rtl_tag); i--;)
 		uip_buf[i + RTL_FRAME_DESC_SIZE] = uip_buf[i];
 	IGMP_O->rtl_tag.tag = HTONS(RTL_FRAME_TAG_ID);
 	IGMP_O->rtl_tag.version = RTL_FRAME_TAG_VERSION;
 	IGMP_O->rtl_tag.reason = 0x00;
 	IGMP_O->rtl_tag.flags = HTONS(RTL_TAG_LEARN_DIS);
 	IGMP_O->rtl_tag.pmask = HTONS(pmask);
-	uip_len = igmp_len;
+	IGMP_TAG_O->svlan = HTONS(0x8100);
+	IGMP_TAG_O->vlan = HTONS(igmp_vlan);
+	uip_len = igmp_len + VLAN_TAG_SIZE;
 }

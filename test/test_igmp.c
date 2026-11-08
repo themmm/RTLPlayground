@@ -2,10 +2,11 @@
  * test_igmp.c - the IGMP snooping handler against the simulated table engine.
  *
  * IGMP frames go in the way the switch traps them to the CPU: destination
- * and source MAC, the 8-byte CPU tag carrying the ingress port, then the IPv4
- * packet. What comes out is checked only from the outside: which ports the
- * table holds for a group afterwards, and the frame the handler leaves to
- * send (its CPU tag and to which ports). The module is compiled unmodified.
+ * and source MAC, the 8-byte CPU tag carrying the ingress port, the 802.1Q
+ * tag if the frame came in tagged, then the IPv4 packet. What comes out is
+ * checked only from the outside: which ports the table holds for a group
+ * afterwards, and the frame the handler leaves to send (its CPU tag and to
+ * which ports, its 802.1Q tag). The module is compiled unmodified.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -41,10 +42,15 @@ static const uint8_t all_hosts[4] = { 224, 0, 0, 1 };
 static const uint8_t v3_routers[4] = { 224, 0, 0, 22 };
 static const uint8_t v2_routers[4] = { 224, 0, 0, 2 };
 
+/* The 802.1Q tag control word (priority and VLAN ID) that trapped frames
+ * carry behind the CPU tag, as when they come in tagged; -1 for no tag */
+static int tag_tci;
+
 /* Puts the frame into uip_buf as the switch traps it on `port`: Ethernet
  * header, CPU tag (the ingress port in the low four bits of its last word),
- * an IPv4 header to `dst` with the Router Alert option unless `plain`, and
- * the IGMP message. Checksums stay 0; the handler does not look at them. */
+ * the 802.1Q tag of tag_tci, an IPv4 header to `dst` with the Router Alert
+ * option unless `plain`, and the IGMP message. Checksums stay 0; the handler
+ * does not look at them. */
 static void trap(uint8_t port, const uint8_t dst[4], bool plain, const uint8_t *msg, uint16_t msg_len)
 {
 	uint8_t *p = uip_buf;
@@ -59,6 +65,10 @@ static void trap(uint8_t port, const uint8_t dst[4], bool plain, const uint8_t *
 	*p++ = 0x04; *p++ = 0x00;
 	*p++ = 0x00; *p++ = 0x00;
 	*p++ = 0x00; *p++ = port;
+	if (tag_tci >= 0) {
+		*p++ = 0x81; *p++ = 0x00;	/* 802.1Q */
+		*p++ = tag_tci >> 8; *p++ = tag_tci;
+	}
 	*p++ = 0x08; *p++ = 0x00;		/* IPv4 */
 	*p++ = 0x40 | ihl; *p++ = 0xc0;
 	*p++ = ip_len >> 8; *p++ = ip_len;
@@ -139,18 +149,27 @@ static void handle(void)
  * nothing to send. A frame to send sits behind the TX descriptor: the
  * trapped frame unchanged except for its CPU tag, which now names the
  * destination ports and disables learning, so the switch does not learn the
- * host's MAC on the CPU port. */
+ * host's MAC on the CPU port, and for the 802.1Q tag behind it, which names
+ * the packet's VLAN; the switch classifies the frame into that VLAN and tags
+ * or untags it on each port by the VLAN's rules (KEEP clear). sent_vlan
+ * holds that VLAN. */
 #define OUT (uip_buf + RTL_FRAME_DESC_SIZE)
+static uint16_t sent_vlan;
 static uint16_t sent_to(void)
 {
+	uint16_t body = in_frame[20] == 0x81 && in_frame[21] == 0x00 ? 24 : 20;
+
+	sent_vlan = 0xffff;
 	if (!uip_len)
 		return 0;
-	CHECK(uip_len == in_len, "the frame keeps its length");
+	CHECK(uip_len == in_len - body + 24, "the frame keeps its length, plus the 802.1Q tag if it came without");
 	CHECK(!memcmp(OUT, in_frame, 12), "and its MAC addresses");
 	CHECK(OUT[12] == 0x88 && OUT[13] == 0x99 && OUT[14] == 0x04 && OUT[15] == 0x00,
 	      "it carries a CPU tag, version 4");
-	CHECK(OUT[16] == 0x00 && OUT[17] == 0x20, "with learning disabled");
-	CHECK(!memcmp(OUT + 20, in_frame + 20, in_len - 20), "the packet behind the tag is unchanged");
+	CHECK(OUT[16] == 0x00 && OUT[17] == 0x20, "with learning disabled and the VLAN rules applying");
+	CHECK(OUT[20] == 0x81 && OUT[21] == 0x00 && !(OUT[22] & 0xf0), "and an 802.1Q tag, priority 0");
+	CHECK(!memcmp(OUT + 24, in_frame + body, in_len - body), "the packet behind the tags is unchanged");
+	sent_vlan = (uint16_t)(OUT[22] & 0x0f) << 8 | OUT[23];
 	return (uint16_t)OUT[18] << 8 | OUT[19];
 }
 
@@ -164,7 +183,8 @@ static uint16_t members(const uint8_t group[4])
 #define P(n) ((uint16_t)1 << (n))
 
 /* VLAN 1: ports 0-5 and 8, port 7 tagged; VLAN 20: port 6, port 7 tagged
- * (a trunk to an access point). PVIDs as the ports' untagged VLANs. */
+ * (a trunk to an access point). PVIDs as the ports' untagged VLANs, 1 on the
+ * trunk. */
 static const uint16_t vlan1 = P(0) | P(1) | P(2) | P(3) | P(4) | P(5) | P(7) | P(8);
 static const uint16_t vlan20 = P(6) | P(7);
 
@@ -182,8 +202,10 @@ static void vlan(uint16_t vid, uint16_t ports, uint16_t tagged)
 static void reset(void)
 {
 	hw_reset(); out_reset();
+	tag_tci = -1;
 	vlan(1, vlan1, P(7));
 	vlan(20, vlan20, P(7));
+	port_pvid_set(7, 1);
 	igmp_setup();
 	igmp_enable();
 }
@@ -475,6 +497,7 @@ static void t_query_forward(void)
 	reset();
 	query_on(8);
 	CHECK(sent_to() == (vlan1 & ~P(8)), "to all members of VLAN 1 but the ingress port, the CPU port neither");
+	CHECK(sent_vlan == 1, "in VLAN 1, the PVID of its ingress port");
 }
 
 static void t_report_forward(void)
@@ -522,6 +545,7 @@ static void t_vlans_apart(void)
 	trap_igmp(6, IGMP_V2_REPORT, grp_a, grp_a, false);
 	handle();
 	CHECK(sent_to() == P(7), "a report in VLAN 20 goes to VLAN 20's ports, not to VLAN 1's router port");
+	CHECK(sent_vlan == 20, "tagged with VLAN 20, the PVID of its ingress port");
 	query_on(6);
 	CHECK(sent_to() == P(7), "a query in VLAN 20 goes to VLAN 20's ports only");
 	trap_igmp(3, IGMP_V2_REPORT, grp_a, grp_a, false);
@@ -531,21 +555,112 @@ static void t_vlans_apart(void)
 
 static void t_long_frame(void)
 {
-	printf("[test] a frame too long to get the TX descriptor in front\n");
-	uint8_t big[UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE - 46] = { IGMP_V2_REPORT, 0, 0, 0, 239, 1, 2, 3 };
+	printf("[test] a frame too long to get the TX descriptor in front and the 802.1Q tag in\n");
+	uint8_t big[UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE - VLAN_TAG_SIZE - 46] = { IGMP_V2_REPORT, 0, 0, 0, 239, 1, 2, 3 };
 	reset();
 	trap(2, grp_b, false, big, sizeof(big));
-	CHECK(uip_len == UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE, "the longest frame that still fits");
+	CHECK(uip_len == UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE - VLAN_TAG_SIZE, "the longest untagged frame that still fits");
 	handle();
 	CHECK(sent_to() == (vlan1 & ~P(2)), "is sent on");
 	CHECK(members(grp_b) == P(2), "and learned");
 
 	reset();
+	tag_tci = 1;
+	trap(7, grp_b, false, big, sizeof(big));
+	CHECK(uip_len == UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE, "a tagged frame with the same packet");
+	handle();
+	CHECK(sent_to() == (vlan1 & ~P(7)), "is sent on too");
+
+	reset();
+	trap(2, grp_b, false, big, sizeof(big));
+	uip_len += 1;
+	handle();
+	CHECK(handled == 1 && uip_len == 0, "an untagged frame one byte longer is not sent on");
+	CHECK(members(grp_b) == P(2), "but learned");
+
+	reset();
 	trap(2, grp_b, false, big, sizeof(big));
 	uip_len = UIP_CONF_BUFFER_SIZE;
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "a frame of the full buffer size is not sent on");
-	CHECK(members(grp_b) == P(2), "but learned");
+	CHECK(handled == 1 && uip_len == 0, "a frame of the full buffer size neither");
+}
+
+static void t_tagged_query(void)
+{
+	printf("[test] a query that came in tagged goes to the members of its VLAN\n");
+	reset();
+	tag_tci = 20;
+	query_on(7);
+	CHECK(sent_to() == P(6), "a query tagged with VLAN 20 goes to VLAN 20's ports only");
+	CHECK(sent_vlan == 20, "in VLAN 20");
+	tag_tci = 1;
+	query_on(7);
+	CHECK(sent_to() == (vlan1 & ~P(7)), "one tagged with VLAN 1 on the same port goes to VLAN 1's ports, not to port 6");
+	CHECK(sent_vlan == 1, "in VLAN 1");
+
+	reset();
+	tag_tci = 0;
+	query_on(6);
+	CHECK(sent_to() == P(7) && sent_vlan == 20, "a priority-tagged one (VLAN ID 0) goes into the PVID's VLAN");
+
+	reset();
+	tag_tci = 30;
+	query_on(7);
+	CHECK(handled == 1 && sent_to() == 0, "one tagged with a VLAN that does not exist goes nowhere");
+
+	reset();
+	tag_tci = 20;
+	query_on(3);
+	CHECK(handled == 1 && sent_to() == 0, "one tagged with a VLAN its ingress port is not in goes nowhere");
+	tag_tci = -1;
+	trap_igmp(2, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == (vlan1 & ~P(2)), "and does not make its port a router port");
+	tag_tci = 1;
+	trap_igmp(6, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == 0, "a report from port 6 tagged with VLAN 1 neither");
+}
+
+static void t_tagged_not_igmp(void)
+{
+	printf("[test] tagged multicast that is not IGMP\n");
+	reset();
+	tag_tci = 20;
+	uint8_t udp[8] = { 0x07, 0x6c, 0x07, 0x6c, 0x00, 0x08, 0x00, 0x00 };
+	trap(7, grp_a, true, udp, sizeof(udp));
+	uip_buf[IP_HDR + VLAN_TAG_SIZE + 9] = 17;	/* protocol UDP */
+	memcpy(in_frame, uip_buf, sizeof(in_frame));
+	uint16_t len = uip_len;
+	handled = igmp_packet_handler();
+	CHECK(handled == 0, "a tagged UDP datagram to a group is left to the caller");
+	CHECK(uip_len == len && !memcmp(uip_buf, in_frame, len), "with its tag in place");
+	CHECK(hw_l2_count() == 0, "and makes no entry");
+}
+
+static void t_tagged_report(void)
+{
+	printf("[test] a report that came in tagged\n");
+	reset();
+	tag_tci = 20;
+	trap_igmp(7, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(handled == 1, "the handler takes a report behind an 802.1Q tag");
+	CHECK(members(grp_a) == P(7), "the group holds the ingress port");
+	trap_v3(7, IGMP_V3_IS_EXCLUDE, grp_b);
+	handle();
+	CHECK(members(grp_b) == P(7), "a tagged IGMPv3 answer to a query too");
+	trap_igmp(7, IGMP_V2_LEAVE, grp_a, v2_routers, false);
+	handle();
+	CHECK(hw_ipmc_find(grp_a) == 0, "a tagged leave takes it out");
+	CHECK(sent_to() == P(6) && sent_vlan == 20, "and is sent on in VLAN 20");
+
+	reset();
+	tag_tci = 0xc000 | 20;	/* priority 6 */
+	trap_igmp(7, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(members(grp_a) == P(7), "a report with a priority in its tag is learned");
+	CHECK(sent_to() == P(6) && sent_vlan == 20, "and sent on in the VLAN of the tag");
 }
 
 int main(void)
@@ -568,6 +683,9 @@ int main(void)
 	t_report_forward();
 	t_vlans_apart();
 	t_long_frame();
+	t_tagged_report();
+	t_tagged_query();
+	t_tagged_not_igmp();
 	printf("\n%d checks, %d failed\n", tests_run, tests_failed);
 	return tests_failed ? 1 : 0;
 }
