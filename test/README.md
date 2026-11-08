@@ -24,8 +24,9 @@ fires — so it drops straight into CI.
   engine that performs a VLAN or L2 operation the moment `TBL_CTRL` is written,
   fetches a MIB counter on `STAT_GET` and drops entries on `L2_TBL_FLUSH_CTRL`.
   Nothing ever reports busy, so a polling loop runs once. The header states the
-  VLAN and L2 entry layouts independently of the firmware, so a test can hold
-  what `rtl837x_port.c` writes against what `page_impl.c` reads.
+  VLAN, L2 and IP multicast entry layouts independently of the firmware, so a
+  test can hold what `rtl837x_port.c` writes against what `page_impl.c` reads,
+  and look up the ports `rtl837x_igmp.c` put into a group.
 - **`env_tables.c`** carries the globals and leaf calls those two modules link
   against; **`stub/`** stands in for the two headers only a firmware build
   generates, so the harness needs no SDCC build first.
@@ -49,6 +50,7 @@ fires — so it drops straight into CI.
 | `test_page_json` | `httpd/page_impl.c` + `rtl837x_port.c` | `/vlan.json`, `/vlanlist`, `/l2.json` (walk, wrap marker, paging inside `outbuf`), 64-bit counters in `/status.json` and `/counters.json` |
 | `test_httpd_tx` | `httpd/httpd.c` + `uip/uip.c` | a GET of a static file against a client that moves its receive window: ACK accounting, continuation chunks out of flash, retransmission |
 | `test_lacp` | `rtl837x_lacp.c` | state machines against a simulated 802.3ad partner: convergence, mis-cabling, expiry, re-election, two groups, delivery by trap |
+| `test_igmp` | `rtl837x_igmp.c` | trapped IGMP frames: v1/v2 reports and leaves, v3 change-to-exclude/include, a second port in a group, the last leave deleting the entry, 224.0.0.x kept out, queries and non-IGMP multicast; the table mock holds IP multicast entries by group |
 
 ## Adding a test for another module
 1. Write `test_<module>.c` with `main()` driving the module's entry points and

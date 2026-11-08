@@ -39,6 +39,8 @@ __xdata uint16_t idx;
 static __xdata uint8_t igmp_grp;
 static __xdata uint8_t igmp_join;
 
+static void igmp_group_update(void);
+
 #ifdef IPMC_USES_L3MC
 struct ipmc_table_entry {
 	uint8_t sip[4];
@@ -251,8 +253,19 @@ uint8_t igmp_packet_handler(void) __banked
 #ifdef DEBUG
 	print_string("IGMP join "); print_byte(igmp_join); write_char('\n');
 #endif
+	igmp_group_update();
+	return 1;
+}
+
+
+/*
+ * Puts the port the packet came in on into the group at igmp_grp
+ * (igmp_join set) or takes it out of it
+ */
+static void igmp_group_update(void)
+{
 	if (uip_buf[igmp_grp] == IGMP_LOCAL_NET_0 && !uip_buf[igmp_grp + 1] && !uip_buf[igmp_grp + 2])
-		return 1;
+		return;
 
 #ifdef IPMC_USES_L3MC
 	memset((__xdata uint8_t *)&entry, 0, sizeof(struct ipmc_table_entry));
@@ -346,7 +359,7 @@ uint8_t igmp_packet_handler(void) __banked
 //			print_string("\nPort-Mask: "); print_short(entry.pmask); write_char('\n');
 		} else {
 			print_string("IGMP Entry already deleted\n");
-			return 1;
+			return;
 		}
 		if (!entry.pmask && idx) { // No more ports in that group and an actual entry?
 			// Delete Entry
@@ -358,12 +371,12 @@ uint8_t igmp_packet_handler(void) __banked
 				reg_read_m(RTL837X_TBL_CTRL);
 			} while (sfr_data[3] & 0x1);
 			print_string("IGMP Entry deleted\n");
-			return 1;
+			return;
 		}
 	}
 
 	if (!entry.pmask)
-		return 1;
+		return;
 	print_string("Updating IGMP entry\n");
 	// Write the updated entry
 #ifdef IPMC_USES_L3MC
@@ -400,5 +413,4 @@ uint8_t igmp_packet_handler(void) __banked
 	reg_read_m(RTL837x_TBL_DATA_0);
 	print_sfr_data();
 #endif
-	return 1;
 }

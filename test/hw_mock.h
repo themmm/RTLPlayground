@@ -53,6 +53,17 @@ void hw_l2_put(uint16_t idx, const uint8_t mac[6], uint16_t vid, uint16_t port_o
 void hw_l2_decode(const struct hw_l2 *e, uint8_t mac[6], uint16_t *vid, uint16_t *port_or_pmask,
 		  bool *valid, bool *is_static, bool *mc);
 
+/* IP multicast entries share the table, the engine and its search by key
+ * with the entries above; bit 28 of word B tells them apart. Word A: the source IP, 0.0.0.0 for any source. Word B:
+ * bits 31:30 the low two bits of the member mask, bit 28 set, bits 27:24 the
+ * low nibble of the group's first octet, bits 23:0 its other three octets.
+ * Word C: bit 16 handled by the ASIC, bits 15:8 the IGMP index, bits 7:0 the
+ * member mask shifted right by two. hw_ipmc_find and hw_ipmc_put take the
+ * any-source entry of a group. */
+const struct hw_l2 *hw_ipmc_find(const uint8_t group[4]);
+uint16_t            hw_ipmc_pmask(const struct hw_l2 *e);
+void                hw_ipmc_put(uint16_t idx, const uint8_t group[4], uint16_t pmask);
+
 /* MIB counter the next STAT_GET for (port, counter) returns */
 void hw_counter_set(uint8_t port, uint8_t counter, uint64_t value);
 
