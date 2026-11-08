@@ -9,6 +9,7 @@
 #define IGMP_V2_REPORT		0x16
 #define IGMP_V2_LEAVE		0x17
 #define IGMP_V3_REPORT		0x22
+#define IGMP_V3_IS_EXCLUDE	2
 #define IGMP_V3_TO_INCLUDE	3
 #define IGMP_V3_TO_EXCLUDE	4
 #define IGMP_LOCAL_NET_0	224
