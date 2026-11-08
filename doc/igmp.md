@@ -79,19 +79,67 @@ well; groups learned while IGMP was on stay in the table, but are no longer look
 `igmp_enable()`starts IGMP which cause IGMP packets to be handled by the CPU and forwarding
 of IP-MC packets to be limited to only subscribed ports.
 
-`igmp_router_port_set()`configures forwarding ports for IGMP messages.
+`igmp_router_port_set()` writes the chip's static router port register
+(`RTL837X_IGMP_ROUTER_PORT`), meant for handling IGMP in the ASIC. Nothing calls it, and the
+forwarding by `igmp_packet_handler()` does not use it (see Router ports below).
 
-`igmp_packet_handler()` implements handling of trapped IGMP packets by the CPU. It is called
-for frames to 01:00:5e:xx:xx:xx and returns 0 when the frame is not a trapped IGMP packet,
-so that it is passed on to the IP stack. IGMPv1/v2 reports (0x12, 0x16) join the group given
-in the IGMP header, IGMPv2 leaves (0x17) leave it, IGMPv3 reports use the first group record
-(type 4 joins, type 3 leaves). Trapped IGMP frames arrive without a VLAN tag.
+`igmp_packet_handler()` implements handling of trapped IGMP packets by the CPU. It is
+called for frames to 01:00:5e:xx:xx:xx and returns 0 when the frame is not a trapped IGMP
+packet, so that it is passed on to the IP stack. IGMPv1/v2 reports (0x12, 0x16) join the
+group given in the IGMP header, IGMPv2 leaves (0x17) leave it, IGMPv3 reports use the first
+group record (type 4 joins, type 3 leaves). Trapped IGMP frames arrive without a VLAN tag.
+The packet's VLAN is the PVID of its ingress port. After learning, the handler sends the
+packet on to the other members of that VLAN: a query to all of them, a report or leave to
+the router ports among them, or to all of them while the VLAN has none (see Router ports
+below). The CPU tag of the frame names these ports and disables learning, so the switch
+does not learn the host's MAC address on the CPU port.
 Reports for groups in 224.0.0.0/24 are ignored: the switch floods that block
 even with IGMP on, and an entry for a group such as 224.0.0.251 (mDNS) would
 otherwise limit it to the ports that reported it, as RFC 4541 warns against.
 
 `igmp_show()` prints out the IGMP configuration on the CLI.
 
+
+## Router ports
+A port a query comes in on becomes a router port: a querier, normally the router, sits
+behind it. The handler keeps the router ports as one port mask. Only queries add to it,
+`igmp on` clears it, and it does not age. Reports and leaves go to the router ports of
+their VLAN only, so the querier learns the members, and IGMPv1/v2 hosts do not see each
+other's reports, which would make them hold back their own. A report or leave that comes
+in on a router port goes to the other router ports of its VLAN only, so with one querier
+nowhere. Other IGMP messages go like reports. While no query has come in on a port of the
+VLAN, reports and leaves go to all its ports but the ingress port, so none is lost before
+the querier is known.
+
+Snooping depends on a querier in every VLAN with multicast listeners. Hosts report on
+their own only when they join; after that, only a query makes them report again. After a
+restart of the switch the group table is empty, and a host that stayed in a group gets the
+group's traffic again once it has answered the next query (125 s apart by default).
+Without a querier it does not get it until it joins anew.
+
+## Differences from RFC 4541
+- **No ageing.** Neither the ports of a group nor the router ports age. A port leaves a
+  group through a leave, at once (fast leave), or when the switch restarts; `igmp off` and
+  `igmp on` keep the groups. A host that goes away without a leave (unplugged, switched
+  off, IGMPv1) keeps its port in the group. With several listeners behind one port (an
+  access point or an unmanaged switch), the leave of one cuts the group off for the others
+  until they answer the querier's group-specific query that follows the leave.
+- **No multicast data to router ports.** RFC 4541 sends multicast data to the router
+  ports as well, and data of groups without members at least there. Here data of a group
+  goes to its member ports only, and data of a group without members is dropped
+  (`LOOKUP_MISS_DROP`). A multicast router behind a router port therefore gets only the
+  groups it joined itself. If one is needed: the lookup-miss action "to router port" (11,
+  see `igmp_setup()`) together with `RTL837X_IGMP_ROUTER_PORT`, untested.
+
+## When ageing is needed
+Without ageing, a port that no longer wants a group still gets its traffic. That costs
+little while the multicast in the network is small, such as SSDP or other service
+discovery; 224.0.0.0/24 (mDNS) is flooded anyway. Ageing is needed as soon as a multicast
+stream with bandwidth enters the network, such as IPTV or cameras. A sketch: two port
+masks per group (reported in this round, reported in the last one), rounds clocked by
+general queries, a port drops out after two rounds without a report (about 250 s with the
+default query interval of 125 s), the router ports likewise; estimated 300-400 B code and
+about 256 B XRAM.
 
 ## IGMP configuration on the Serial Console
 For testing the following commands are provided on the serial console:
