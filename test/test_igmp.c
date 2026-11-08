@@ -4,8 +4,8 @@
  * IGMP frames go in the way the switch traps them to the CPU: destination
  * and source MAC, the 8-byte CPU tag carrying the ingress port, then the IPv4
  * packet. What comes out is checked only from the outside: which ports the
- * table holds for a group afterwards, and whether the handler leaves a frame
- * to send. The module is compiled unmodified.
+ * table holds for a group afterwards, and the frame the handler leaves to
+ * send (its CPU tag and to which ports). The module is compiled unmodified.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +14,7 @@
 #include "rtl837x_common.h"
 #include "rtl837x_regs.h"
 #include "rtl837x_igmp.h"
+#include "rtl837x_port.h"
 #include "uip.h"
 #include <test/support.h>
 #include <test/hw_mock.h>
@@ -27,7 +28,6 @@ void print_sfr_data(void) { }
 
 /* ---- trapped frames, laid out byte by byte ---- */
 
-#define IGMP_MEMBERSHIP_QUERY	0x11
 #define IGMP_V3_IS_EXCLUDE	2
 #define IGMP_V3_ALLOW_NEW	5
 #define IP_OPT_ROUTER_ALERT	0x94
@@ -91,11 +91,34 @@ static void trap_v3(uint8_t port, uint8_t rtype, const uint8_t group[4])
 
 /* ---- running the handler ---- */
 
-static uint8_t handled;
+static uint8_t  handled;
+static uint8_t  in_frame[UIP_CONF_BUFFER_ALLOC_SIZE];
+static uint16_t in_len;
 
 static void handle(void)
 {
+	memcpy(in_frame, uip_buf, sizeof(in_frame));
+	in_len = uip_len;
 	handled = igmp_packet_handler();
+}
+
+/* The ports the handler sends the trapped frame on to, 0 when it leaves
+ * nothing to send. A frame to send sits behind the TX descriptor: the
+ * trapped frame unchanged except for its CPU tag, which now names the
+ * destination ports and disables learning, so the switch does not learn the
+ * host's MAC on the CPU port. */
+#define OUT (uip_buf + RTL_FRAME_DESC_SIZE)
+static uint16_t sent_to(void)
+{
+	if (!uip_len)
+		return 0;
+	CHECK(uip_len == in_len, "the frame keeps its length");
+	CHECK(!memcmp(OUT, in_frame, 12), "and its MAC addresses");
+	CHECK(OUT[12] == 0x88 && OUT[13] == 0x99 && OUT[14] == 0x04 && OUT[15] == 0x00,
+	      "it carries a CPU tag, version 4");
+	CHECK(OUT[16] == 0x00 && OUT[17] == 0x20, "with learning disabled");
+	CHECK(!memcmp(OUT + 20, in_frame + 20, in_len - 20), "the packet behind the tag is unchanged");
+	return (uint16_t)OUT[18] << 8 | OUT[19];
 }
 
 /* Ports the table holds for a group, 0 when it has no entry */
@@ -107,10 +130,36 @@ static uint16_t members(const uint8_t group[4])
 
 #define P(n) ((uint16_t)1 << (n))
 
+/* VLAN 1: ports 0-5 and 8, port 7 tagged; VLAN 20: port 6, port 7 tagged
+ * (a trunk to an access point). PVIDs as the ports' untagged VLANs. */
+static const uint16_t vlan1 = P(0) | P(1) | P(2) | P(3) | P(4) | P(5) | P(7) | P(8);
+static const uint16_t vlan20 = P(6) | P(7);
+
+static void vlan(uint16_t vid, uint16_t ports, uint16_t tagged)
+{
+	vlan_settings.vlan = vid;
+	vlan_settings.members = ports;
+	vlan_settings.tagged = tagged;
+	vlan_create();
+	for (uint8_t i = 0; i < 9; i++)
+		if (ports & ~tagged & P(i))
+			port_pvid_set(i, vid);
+}
+
 static void reset(void)
 {
 	hw_reset(); out_reset();
-	igmpEnabled = 1;
+	vlan(1, vlan1, P(7));
+	vlan(20, vlan20, P(7));
+	igmp_setup();
+	igmp_enable();
+}
+
+/* A general query from the querier on `port` */
+static void query_on(uint8_t port)
+{
+	trap_igmp(port, IGMP_QUERY, (const uint8_t[4]){ 0, 0, 0, 0 }, all_hosts, false);
+	handle();
 }
 
 /* ---- the cases ---- */
@@ -122,13 +171,12 @@ static void t_v2_join_leave(void)
 	trap_igmp(3, IGMP_V2_REPORT, grp_a, grp_a, false);
 	handle();
 	CHECK(handled == 1, "the handler takes the report");
-	CHECK(uip_len == 0, "and sends nothing");
 	CHECK(members(grp_a) == P(3), "the group holds the ingress port");
 	CHECK(hw_l2_count() == 1, "in one entry");
 
 	trap_igmp(3, IGMP_V2_LEAVE, grp_a, v2_routers, false);
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "the leave is taken, nothing sent");
+	CHECK(handled == 1, "the leave is taken");
 	CHECK(hw_ipmc_find(grp_a) == 0, "the last leave deletes the entry");
 	CHECK(hw_l2_count() == 0, "the table is empty again");
 }
@@ -139,7 +187,7 @@ static void t_v1_join(void)
 	reset();
 	trap_igmp(1, IGMP_V1_REPORT, grp_b, grp_b, true);
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "taken, nothing sent");
+	CHECK(handled == 1, "taken");
 	CHECK(members(grp_b) == P(1), "the group holds the ingress port");
 }
 
@@ -161,7 +209,6 @@ static void t_second_port(void)
 	trap_igmp(1, IGMP_V2_LEAVE, grp_a, v2_routers, false);
 	handle();
 	CHECK(members(grp_a) == P(6), "the leave takes only its own port out");
-	CHECK(uip_len == 0, "nothing sent");
 
 	trap_igmp(6, IGMP_V2_LEAVE, grp_a, v2_routers, false);
 	handle();
@@ -191,7 +238,7 @@ static void t_leave_unknown(void)
 	reset();
 	trap_igmp(5, IGMP_V2_LEAVE, grp_a, v2_routers, false);
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "taken, nothing sent");
+	CHECK(handled == 1, "taken");
 	CHECK(hw_l2_count() == 0, "no entry is made");
 }
 
@@ -201,7 +248,7 @@ static void t_v3(void)
 	reset();
 	trap_v3(4, IGMP_V3_TO_EXCLUDE, grp_a);
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "taken, nothing sent");
+	CHECK(handled == 1, "taken");
 	CHECK(members(grp_a) == P(4), "CHANGE_TO_EXCLUDE puts the ingress port in");
 	trap_v3(7, IGMP_V3_TO_EXCLUDE, grp_a);
 	handle();
@@ -215,7 +262,7 @@ static void t_v3(void)
 
 	trap_v3(4, IGMP_V3_ALLOW_NEW, grp_b);
 	handle();
-	CHECK(handled == 1 && uip_len == 0 && hw_l2_count() == 0, "other record types are taken and ignored");
+	CHECK(handled == 1 && hw_l2_count() == 0, "other record types are taken and ignored");
 }
 
 static void t_local_net(void)
@@ -224,7 +271,7 @@ static void t_local_net(void)
 	reset();
 	trap_igmp(3, IGMP_V2_REPORT, grp_mdns, grp_mdns, false);
 	handle();
-	CHECK(handled == 1 && uip_len == 0, "a v2 report for 224.0.0.251 is taken, nothing sent");
+	CHECK(handled == 1, "a v2 report for 224.0.0.251 is taken");
 	CHECK(hw_l2_count() == 0, "and makes no entry");
 	trap_v3(3, IGMP_V3_TO_EXCLUDE, grp_mdns);
 	handle();
@@ -237,10 +284,8 @@ static void t_query(void)
 	reset();
 	trap_igmp(2, IGMP_V2_REPORT, grp_a, grp_a, false);
 	handle();
-	trap_igmp(8, IGMP_MEMBERSHIP_QUERY, (const uint8_t[4]){ 0, 0, 0, 0 }, all_hosts, false);
-	handle();
+	query_on(8);
 	CHECK(handled == 1, "the handler takes it");
-	CHECK(uip_len == 0, "and sends nothing");
 	CHECK(members(grp_a) == P(2) && hw_l2_count() == 1, "the table is unchanged");
 }
 
@@ -272,6 +317,85 @@ static void t_existing_entry(void)
 	CHECK(members(grp_b) == (P(5) | P(8)), "a leave takes its port out and keeps the others");
 }
 
+static void t_query_forward(void)
+{
+	printf("[test] a query goes to every port of its VLAN\n");
+	reset();
+	query_on(8);
+	CHECK(sent_to() == (vlan1 & ~P(8)), "to all members of VLAN 1 but the ingress port, the CPU port neither");
+}
+
+static void t_report_forward(void)
+{
+	printf("[test] reports and leaves go to the querier once it is known\n");
+	reset();
+	trap_igmp(2, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == (vlan1 & ~P(2)), "before any query a report goes to every other port of the VLAN");
+	trap_igmp(2, IGMP_V2_LEAVE, grp_a, v2_routers, false);
+	handle();
+	CHECK(sent_to() == (vlan1 & ~P(2)), "a leave too");
+
+	query_on(8);
+	trap_igmp(2, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == P(8), "after a query on port 8 a report goes there only");
+	CHECK(members(grp_a) == P(2), "and is still learned");
+	trap_v3(3, IGMP_V3_TO_EXCLUDE, grp_b);
+	handle();
+	CHECK(sent_to() == P(8), "a v3 report too");
+	trap_igmp(2, IGMP_V2_LEAVE, grp_a, v2_routers, false);
+	handle();
+	CHECK(sent_to() == P(8), "a leave too");
+	CHECK(hw_ipmc_find(grp_a) == 0, "and is still learned");
+
+	trap_igmp(8, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(handled == 1 && sent_to() == 0, "a report from the querier's port is not sent to the hosts");
+
+	query_on(1);
+	trap_igmp(2, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == (P(1) | P(8)), "a query on a second port adds it, the first one stays");
+	query_on(1);
+	CHECK(sent_to() == (vlan1 & ~P(1)), "a query from a router port still goes to all others");
+}
+
+static void t_vlans_apart(void)
+{
+	printf("[test] IGMP stays in the VLAN of its ingress port\n");
+	reset();
+	query_on(8);
+	CHECK(!(sent_to() & P(6)), "a query in VLAN 1 does not reach port 6 (VLAN 20)");
+	trap_igmp(6, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == P(7), "a report in VLAN 20 goes to VLAN 20's ports, not to VLAN 1's router port");
+	query_on(6);
+	CHECK(sent_to() == P(7), "a query in VLAN 20 goes to VLAN 20's ports only");
+	trap_igmp(3, IGMP_V2_REPORT, grp_a, grp_a, false);
+	handle();
+	CHECK(sent_to() == P(8), "a report in VLAN 1 goes to VLAN 1's router port, not to VLAN 20's");
+}
+
+static void t_long_frame(void)
+{
+	printf("[test] a frame too long to get the TX descriptor in front\n");
+	uint8_t big[UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE - 46] = { IGMP_V2_REPORT, 0, 0, 0, 239, 1, 2, 3 };
+	reset();
+	trap(2, grp_b, false, big, sizeof(big));
+	CHECK(uip_len == UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE, "the longest frame that still fits");
+	handle();
+	CHECK(sent_to() == (vlan1 & ~P(2)), "is sent on");
+	CHECK(members(grp_b) == P(2), "and learned");
+
+	reset();
+	trap(2, grp_b, false, big, sizeof(big));
+	uip_len = UIP_CONF_BUFFER_SIZE;
+	handle();
+	CHECK(handled == 1 && uip_len == 0, "a frame of the full buffer size is not sent on");
+	CHECK(members(grp_b) == P(2), "but learned");
+}
+
 int main(void)
 {
 	printf("== rtl837x_igmp.c handler tests ==\n");
@@ -285,6 +409,10 @@ int main(void)
 	t_query();
 	t_not_igmp();
 	t_existing_entry();
+	t_query_forward();
+	t_report_forward();
+	t_vlans_apart();
+	t_long_frame();
 	printf("\n%d checks, %d failed\n", tests_run, tests_failed);
 	return tests_failed ? 1 : 0;
 }

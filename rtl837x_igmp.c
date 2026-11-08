@@ -14,6 +14,7 @@
 #include "rtl837x_sfr.h"
 #include "rtl837x_regs.h"
 #include "rtl837x_igmp.h"
+#include "rtl837x_port.h"
 #include "machine.h"
 
 extern __code const struct machine machine;
@@ -38,8 +39,11 @@ __xdata uint16_t idx;
 
 static __xdata uint8_t igmp_grp;
 static __xdata uint8_t igmp_join;
+static __xdata uint16_t igmp_len;
+static __xdata uint16_t igmp_router_ports;	// Ports a query came in on
 
 static void igmp_group_update(void);
+static void igmp_forward(void);
 
 #ifdef IPMC_USES_L3MC
 struct ipmc_table_entry {
@@ -91,6 +95,7 @@ struct igmp_pkt {
 	uint8_t mc_ip[4];
 };
 #define IGMP_I ((__xdata struct igmp_pkt *)&uip_buf[0])
+#define IGMP_O ((__xdata struct igmp_pkt *)&uip_buf[RTL_FRAME_DESC_SIZE])
 
 
 void igmp_setup(void) __banked
@@ -146,6 +151,7 @@ void igmp_enable(void) __banked
 {
 	print_string("igmp_enable called\n");
 	igmpEnabled = 1;
+	igmp_router_ports = 0;
 	// Enable lookup of IPv4 MC addresses in table
 	reg_bit_set(RTL837X_L2_CTRL, L2_CTRL_LUT_IPMC_HASH);
 	// Configure trapping of unhandled IGMP protocol packets to CPU
@@ -214,7 +220,8 @@ uint8_t igmp_packet_handler(void) __banked
 {
 	if (IGMP_I->ipv4_tag != HTONS(UIP_ETHTYPE_IP) || IGMP_I->protocol != IGMP_PROTO)
 		return 0;
-	// By default we do not send anything out
+	// What is sent out is decided by igmp_forward()
+	igmp_len = uip_len;
 	uip_len = 0;
 
 #ifdef DEBUG
@@ -244,16 +251,18 @@ uint8_t igmp_packet_handler(void) __banked
 		else if (uip_buf[igmp_grp] == IGMP_V3_TO_INCLUDE)
 			igmp_join = 0;
 		else
-			return 1;
+			goto forward;
 		break;
 	default:
-		return 1;
+		goto forward;
 	}
 	igmp_grp += IGMP_GROUP_OFS;
 #ifdef DEBUG
 	print_string("IGMP join "); print_byte(igmp_join); write_char('\n');
 #endif
 	igmp_group_update();
+forward:
+	igmp_forward();
 	return 1;
 }
 
@@ -413,4 +422,38 @@ static void igmp_group_update(void)
 	reg_read_m(RTL837x_TBL_DATA_0);
 	print_sfr_data();
 #endif
+}
+
+
+/*
+ * Sends the trapped IGMP packet on to the other ports of the VLAN it came in on:
+ * a query to all of them, a report or leave to those of them a query came in on,
+ * or to all of them while no query has come in on any. The port a query came in
+ * on is remembered as a router port.
+ */
+static void igmp_forward(void)
+{
+	uint8_t port = (IGMP_I->rtl_tag.pmask >> 8) & 0x0f;  // Swap bytes from network order, only 4 LSB count
+	uint8_t query = uip_buf[IGMP_IP_HDR + ((IGMP_I->hlen & IGMP_IP_IHL) << 2)] == IGMP_QUERY;
+	uint16_t pmask;
+
+	if (query)
+		igmp_router_ports |= PORT_BIT(port);
+	vlan_get(port_pvid_get(port));
+	pmask = ((((uint16_t)sfr_data[2]) << 8) | sfr_data[3]) & PMASK_9;
+	if (!query && (pmask & igmp_router_ports))
+		pmask &= igmp_router_ports;
+	pmask &= ~PORT_BIT(port);
+	if (!pmask || igmp_len > UIP_CONF_BUFFER_SIZE - RTL_FRAME_DESC_SIZE)
+		return;
+
+	// Make room for the TX frame descriptor in front of the frame
+	for (uint16_t i = igmp_len; i--;)
+		uip_buf[i + RTL_FRAME_DESC_SIZE] = uip_buf[i];
+	IGMP_O->rtl_tag.tag = HTONS(RTL_FRAME_TAG_ID);
+	IGMP_O->rtl_tag.version = RTL_FRAME_TAG_VERSION;
+	IGMP_O->rtl_tag.reason = 0x00;
+	IGMP_O->rtl_tag.flags = HTONS(RTL_TAG_LEARN_DIS);
+	IGMP_O->rtl_tag.pmask = HTONS(pmask);
+	uip_len = igmp_len;
 }
