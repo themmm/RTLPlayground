@@ -89,17 +89,33 @@ static void l2_key(const struct hw_l2 *e, uint8_t mac[6], uint16_t *vid)
 	*vid = ((e->b >> 16) & 0xfff);
 }
 
+/* The key of an entry: word A and the low 29 bits of word B (entry kind,
+ * VID or group, first MAC octets). The port bits and the valid bit are not
+ * part of it. */
+#define HW_IPMC  (1u << 28)
+#define HW_KEY_B 0x1fffffffu
+
+static struct hw_l2 *l2_lookup(uint32_t a, uint32_t b)
+{
+	for (int i = 0; i < HW_L2_MAX; i++)
+		if (l2[i].present && l2[i].a == a && !((l2[i].b ^ b) & HW_KEY_B))
+			return &l2[i];
+	return 0;
+}
+
+static uint32_t l2_word_a(const uint8_t mac[6])
+{
+	return ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
+}
+
+static uint32_t l2_word_b(const uint8_t mac[6], uint16_t vid)
+{
+	return ((uint32_t)(vid & 0xfff) << 16) | ((uint32_t)mac[0] << 8) | mac[1];
+}
+
 const struct hw_l2 *hw_l2_find(const uint8_t mac[6], uint16_t vid)
 {
-	for (int i = 0; i < HW_L2_MAX; i++) {
-		uint8_t m[6]; uint16_t v;
-		if (!l2[i].present)
-			continue;
-		l2_key(&l2[i], m, &v);
-		if (v == vid && !memcmp(m, mac, 6))
-			return &l2[i];
-	}
-	return 0;
+	return l2_lookup(l2_word_a(mac), l2_word_b(mac, vid));
 }
 
 static struct hw_l2 *l2_free(void)
@@ -126,8 +142,8 @@ void hw_l2_put(uint16_t idx, const uint8_t mac[6], uint16_t vid, uint16_t port_o
 		e = l2_free();
 	e->present = true;
 	e->idx = idx & 0xfff;
-	e->a = ((uint32_t)mac[2] << 24) | ((uint32_t)mac[3] << 16) | ((uint32_t)mac[4] << 8) | mac[5];
-	e->b = (0x20u << 24) | ((uint32_t)(vid & 0xfff) << 16) | ((uint32_t)mac[0] << 8) | mac[1];
+	e->a = l2_word_a(mac);
+	e->b = (0x20u << 24) | l2_word_b(mac, vid);
 	if (mc) {
 		e->b |= (uint32_t)(port_or_pmask & 0x3) << 30;
 		e->c = (port_or_pmask >> 2) & 0xff;
@@ -150,6 +166,30 @@ void hw_l2_decode(const struct hw_l2 *e, uint8_t mac[6], uint16_t *vid, uint16_t
 		*port_or_pmask = ((e->b >> 30) & 0x3) | ((e->c & 0xff) << 2);
 	else
 		*port_or_pmask = ((e->b >> 30) & 0x3) | ((e->c & 0x3) << 2);
+}
+
+/* ---- IP multicast entries -------------------------------------------- */
+
+static uint32_t ipmc_word_b(const uint8_t group[4])
+{
+	return HW_IPMC | ((uint32_t)(group[0] & 0xf) << 24) | ((uint32_t)group[1] << 16)
+		| ((uint32_t)group[2] << 8) | group[3];
+}
+
+const struct hw_l2 *hw_ipmc_find(const uint8_t group[4]) { return l2_lookup(0, ipmc_word_b(group)); }
+
+uint16_t hw_ipmc_pmask(const struct hw_l2 *e) { return ((e->b >> 30) & 0x3) | ((e->c & 0xff) << 2); }
+
+void hw_ipmc_put(uint16_t idx, const uint8_t group[4], uint16_t pmask)
+{
+	struct hw_l2 *e = l2_lookup(0, ipmc_word_b(group));
+	if (!e)
+		e = l2_free();
+	e->present = true;
+	e->idx = idx & 0xfff;
+	e->a = 0;
+	e->b = ((uint32_t)(pmask & 0x3) << 30) | ipmc_word_b(group);
+	e->c = (pmask >> 2) & 0xff;
 }
 
 /* ---- the engine ------------------------------------------------------ */
@@ -187,7 +227,7 @@ static void table_exec(uint32_t ctrl)
 				     .b = regfile[RTL837x_TBL_DATA_IN_B], .c = regfile[RTL837x_TBL_DATA_IN_C] };
 		uint8_t mac[6]; uint16_t vid;
 		l2_key(&key, mac, &vid);
-		struct hw_l2 *e = (struct hw_l2 *)hw_l2_find(mac, vid);
+		struct hw_l2 *e = l2_lookup(key.a, key.b);
 		if (write) {
 			if (clear) {
 				if (e)
