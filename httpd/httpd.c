@@ -460,7 +460,8 @@ static void upload_write(uint16_t len, __xdata bool advance)
  */
 uint8_t stream_upload(void)
 {
-	__xdata struct httpd_state * __xdata s = &(uip_conn->appstate);
+	static __xdata struct httpd_state * __xdata s;	// static: would be spilled (#386)
+	s = &(uip_conn->appstate);
 
 	dbg_string("Stream_upload called: ");
 	dbg_short(upload_settings.bptr); dbg_char('\n');
@@ -921,7 +922,8 @@ static bool upload_room(void)
 
 void httpd_appcall(void)
 {
-	__xdata struct httpd_state * __xdata s = &(uip_conn->appstate);
+	static __xdata struct httpd_state * __xdata s;	// static: would be spilled (#386)
+	s = &(uip_conn->appstate);
 
 	dbg_char('P');
 #ifdef DEBUG
