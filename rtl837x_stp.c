@@ -1509,7 +1509,7 @@ void stp_off(void) __banked
 }
 
 
-void stp_port_admin(uint8_t port, uint8_t on) __banked
+void stp_port_admin(uint8_t port, __xdata uint8_t on) __banked
 {
 	if (on) {
 		stp_state_set(port, 0b01);
