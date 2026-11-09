@@ -58,8 +58,10 @@ bool nic_rx_packet(__xdata uint8_t *buffer, uint16_t ring_ptr) __reentrant
 
 /*
  * Transfers data in XMEM to the ASIC for transmission by the NIC
+ * Returns 0 if the transfer did not complete. The caller reports that,
+ * so this function calls nothing and SDCC can overlay its parameters.
  */
-void nic_tx_packet(__xdata uint8_t *buffer, uint16_t len, uint16_t ring_ptr)
+uint8_t nic_tx_packet(__xdata uint8_t *buffer, uint16_t len, uint16_t ring_ptr)
 {
 	uint16_t guard = 0;
 
@@ -82,9 +84,8 @@ void nic_tx_packet(__xdata uint8_t *buffer, uint16_t len, uint16_t ring_ptr)
 	len >>= 3;
 	SFR_NIC_CTRL = len;
 	while (SFR_NIC_CTRL != 0) {
-		if (++guard == 0) {
-			print_string("NIC: TX transfer did not complete\n");
-			return;
-		}
+		if (++guard == 0)
+			return 0;
 	}
+	return 1;
 }

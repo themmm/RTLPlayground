@@ -908,10 +908,9 @@ void tcpip_output(void)
 
 	// Move data over from xmem buffer to ASIC side using DMA. A VLAN-tagged
 	// frame starts at uip_buf; an untagged frame retains four bytes of padding.
-	if (frame_tagged)
-		nic_tx_packet(uip_buf, FRAME_Q->len, ring_ptr);
-	else
-		nic_tx_packet(uip_buf + VLAN_TAG_SIZE, FRAME->len, ring_ptr);
+	if (!(frame_tagged ? nic_tx_packet(uip_buf, FRAME_Q->len, ring_ptr)
+			   : nic_tx_packet(uip_buf + VLAN_TAG_SIZE, FRAME->len, ring_ptr)))
+		print_string("NIC: TX transfer did not complete\n");
 
 	// New position of the ring-pointer on the NIC-side indicates number of bytes transmitted
 	reg_read_m(RTL837X_REG_NIC_TX_CURR_PKT);
