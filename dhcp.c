@@ -302,7 +302,8 @@ void parse_opts(void)
 
 void parse_dhcp(void)
 {
-	if (DHCP_P->tid != dhcp_state.transaction_id)
+	// memcmp() keeps the 32-bit compare out of direct RAM (spill space)
+	if (memcmp(&DHCP_P->tid, &dhcp_state.transaction_id, 4))
 		return;
 	if (DHCP_P->cookie[0] != 0x63 || DHCP_P->cookie[1] != 0x82 || DHCP_P->cookie[2] != 0x53 || DHCP_P->cookie[3] != 0x63)
 		return;
