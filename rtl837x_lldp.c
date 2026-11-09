@@ -251,7 +251,7 @@ uint8_t lldp_sysdesc(__xdata uint8_t *p) __banked
     return machine_name_length + 1 + version_length + 2;
 }
 
-uint8_t lldp_portdesc(__xdata uint8_t *p, uint8_t port) __banked
+uint8_t lldp_portdesc(__xdata uint8_t *p, __xdata uint8_t port) __banked
 {
     uint8_t name_length = strlen_x(port_names[port]);
 

@@ -86,7 +86,7 @@ void lldp_set_addresses(void) __banked;
 void lldp_set_rtl_wrapper(void) __banked;
 uint8_t lldp_sysname(__xdata uint8_t *p) __banked;
 uint8_t lldp_sysdesc(__xdata uint8_t *p) __banked;
-uint8_t lldp_portdesc(__xdata uint8_t *p, uint8_t port) __banked;
+uint8_t lldp_portdesc(__xdata uint8_t *p, __xdata uint8_t port) __banked;
 uint8_t lldp_port_org_tlvs(__xdata uint8_t *p, uint8_t port) __banked __reentrant;
 
 #endif
