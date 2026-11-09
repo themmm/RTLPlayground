@@ -873,6 +873,52 @@ static void tx_send(uint16_t len)
 }
 
 
+/*
+ * The 32-bit flash addresses of a file response and the upload limit are
+ * handled in functions of their own: httpd_appcall() runs out of registers
+ * for them, and SDCC would give it spill space in direct RAM for good.
+ */
+
+// Reads the first part of file entry into outbuf behind the header
+static void file_start(void)
+{
+	flash_region.addr = f_data[entry].start;
+	len_left = f_data[entry].len;
+	if (len_left > (TCP_OUTBUF_SIZE - slen)) {
+		cont_len = len_left - (TCP_OUTBUF_SIZE - slen);
+		len_left = TCP_OUTBUF_SIZE - slen;
+		cont_addr = flash_region.addr + len_left;
+	}
+	dbg_string("MIME: "); dbg_string(mime_strings[f_data[entry].mime]); dbg_char('\n');
+	flash_region.len = len_left;
+	flash_read_bulk(outbuf + slen);
+	slen += len_left;
+}
+
+// Reads the next part of the file being sent into outbuf and sends it
+static void file_cont(void)
+{
+	slen = cont_len > uip_mss() ? uip_mss() : cont_len;
+	if (slen > TCP_OUTBUF_SIZE)
+		slen = TCP_OUTBUF_SIZE;
+	flash_region.addr = cont_addr;
+	flash_region.len = slen;
+	flash_read_bulk(outbuf);
+	o_idx = 0;
+	tx_send(slen);
+	cont_len -= slen;
+	cont_addr += slen;
+}
+
+// Takes the new data off what a firmware upload may still send
+static bool upload_room(void)
+{
+	if (uip_len > max_upload)
+		return false;
+	max_upload -= uip_len;
+	return true;
+}
+
 void httpd_appcall(void)
 {
 	__xdata struct httpd_state * __xdata s = &(uip_conn->appstate);
@@ -930,16 +976,7 @@ void httpd_appcall(void)
 			s->tstate = TSTATE_TX;
 		} else if (cont_len) {
 			dbg_string("CONT cont_len: "); dbg_short(cont_len);
-			slen = cont_len > uip_mss() ? uip_mss() : cont_len;
-			if (slen > TCP_OUTBUF_SIZE)
-				slen = TCP_OUTBUF_SIZE;
-			flash_region.addr = cont_addr;
-			flash_region.len = slen;
-			flash_read_bulk(outbuf);
-			o_idx = 0;
-			tx_send(slen);
-			cont_len -= slen;
-			cont_addr += slen;
+			file_cont();
 			s->tstate = TSTATE_TX;
 		} else if (s->fw_reset_pending) {
 			// The upload verdict has been fully ACKed by the client;
@@ -948,9 +985,7 @@ void httpd_appcall(void)
 			reset_chip();
 		}
 	} else if (uip_newdata() && s->tstate == TSTATE_POST) {
-		if (config_upload || uip_len <= max_upload) {
-			if (!config_upload)
-				max_upload -= uip_len;
+		if (config_upload || upload_room()) {
 			upload_settings.p = uip_appdata;
 			upload_settings.bptr = 0;
 			upload_settings.plen = uip_len;
@@ -1100,17 +1135,7 @@ void httpd_appcall(void)
 				slen += strtox(outbuf + slen, "Content-Encoding: gzip\r\n");
 			slen += strtox(outbuf + slen, "Cache-Control: max-age=60, must-revalidate\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nContent-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'self'\r\n\r\n");
 
-			len_left = f_data[entry].len;
-			if (len_left > (TCP_OUTBUF_SIZE - slen)) {
-				cont_len = len_left - (TCP_OUTBUF_SIZE - slen);
-				len_left = TCP_OUTBUF_SIZE - slen;
-				cont_addr = f_data[entry].start + len_left;
-			}
-			dbg_string("MIME: "); dbg_string(mime_strings[f_data[entry].mime]); dbg_char('\n');
-			flash_region.addr = f_data[entry].start;
-			flash_region.len = len_left;
-			flash_read_bulk(outbuf + slen);
-			slen += len_left;
+			file_start();
 		}
 do_send:
 		dbg_string("slen: "); dbg_short(slen); dbg_char('\n');
