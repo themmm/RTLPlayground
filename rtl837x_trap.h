@@ -11,6 +11,6 @@
 	 ? TRAP_RX_HDR_SIZE + VLAN_TAG_SIZE : TRAP_RX_HDR_SIZE)
 
 void trap_init(void) __banked;
-void trap_rma_set(uint16_t reg, uint8_t act) __banked;
+void trap_rma_set(uint16_t reg, __xdata uint8_t act) __banked;
 
 #endif
