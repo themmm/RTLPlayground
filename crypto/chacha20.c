@@ -34,7 +34,7 @@ void chacha20_encrypt(void) __banked
 	__xdata uint8_t *p = chacha20.plaintext;
 
 	while (chacha20.length) {
-		register uint8_t i;
+		static __xdata uint8_t i;	// static: would take direct RAM
 		chacha_count();
 		memcpy(chacha20.wstate, chacha20.wstate + 64, 64);
 #ifdef DEBUG
