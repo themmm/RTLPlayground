@@ -2210,7 +2210,8 @@ void execute_config(void) __banked
 	save_cmd = 0;
 
 	uint8_t cmd_idx = 0;
-	uint8_t skipping = 0;
+	static __xdata uint8_t skipping;	// static: would take direct RAM
+	skipping = 0;
 	do {
 		flash_region.addr = pos;
 		flash_region.len = FLASH_READ_BURST_SIZE;
