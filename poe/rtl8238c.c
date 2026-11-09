@@ -278,10 +278,8 @@ static void pse_port(uint8_t port)
 
 // Mode field (reg 0x12) and enable bit (reg 0x14) of one port, as the vendor
 // firmware's per-port setter does
-static void pse_port_cfg(uint8_t port, uint8_t on)
+static void pse_port_cfg(uint8_t port, __xdata uint8_t o)
 {
-	__xdata uint8_t o = on;
-
 	pse_port(port);
 	pse_at(pse_dev_p, PSE_REG_STATUS);
 	pse_read();
@@ -298,10 +296,9 @@ static void pse_port_cfg(uint8_t port, uint8_t on)
 	pse_write(4);
 }
 
-void poe_port_set(uint8_t port_num, uint8_t port_on) __banked
+void poe_port_set(uint8_t port_num, __xdata uint8_t o) __banked
 {
 	__xdata uint8_t p = port_num;
-	__xdata uint8_t o = port_on;
 
 	if (p >= POE_PORTS || !i2c_setup())
 		return;

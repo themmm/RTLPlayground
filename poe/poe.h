@@ -35,7 +35,7 @@ void poe_bringup(void) __banked;
 
 /* Enable/disable PoE on a single port (`poe port <n> <on|off>`). port_num is
  * 0-based; port_on: 1 = enable, 0 = disable. */
-void poe_port_set(uint8_t port_num, uint8_t port_on) __banked;
+void poe_port_set(uint8_t port_num, __xdata uint8_t port_on) __banked;
 
 /* Enable/disable ALL ports at once (`poe global <on|off>` + the web UI's "All
  * PoE"). on: 1 = enable all, 0 = disable all. */
