@@ -308,7 +308,8 @@ void send_vlan(uint16_t vlan)
 			json_char_to_html(vlan_names[n++]);
 	}
 	slen += strtox(outbuf + slen, "\",\"pvid\":\"0x");
-	uint16_t pvid_mask = 0;
+	static __xdata uint16_t pvid_mask;	// static: would take direct RAM (#386)
+	pvid_mask = 0;
 	for (uint8_t i = MACHINE_MIN_PORT; i <= MACHINE_MAX_PORT; i++) {
 		if (port_pvid_get(i) == vlan)
 			pvid_mask |= (1 << i);
