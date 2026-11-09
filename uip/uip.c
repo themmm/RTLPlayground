@@ -685,6 +685,26 @@ uip_add_rcv_nxt(u16_t n)
   uip_conn->rcv_nxt[3] = uip_acc32[3];
 }
 /*---------------------------------------------------------------------------*/
+/*---------------------------------------------------------------------------*/
+/* Updates the round-trip time estimate of a connection. A function of its
+   own that calls nothing, so its local is overlaid instead of taking a
+   byte of direct RAM for good in uip_process(). */
+static void
+uip_rtt_update(__xdata struct uip_conn *c)
+{
+  signed char m;
+  m = c->rto - c->timer;
+  /* This is taken directly from VJs original code in his paper */
+  m = m - (c->sa >> 3);
+  c->sa += m;
+  if(m < 0) {
+    m = -m;
+  }
+  m = m - (c->sv >> 2);
+  c->sv += m;
+  c->rto = (c->sa >> 3) + c->sv;
+}
+/*---------------------------------------------------------------------------*/
 void
 uip_process(u8_t flag) __banked
 {
@@ -1488,18 +1508,7 @@ uip_process(u8_t flag) __banked
 
       /* Do RTT estimation, unless we have done retransmissions. */
       if(uip_connr->nrtx == 0) {
-	signed char m;
-	m = uip_connr->rto - uip_connr->timer;
-	/* This is taken directly from VJs original code in his paper */
-	m = m - (uip_connr->sa >> 3);
-	uip_connr->sa += m;
-	if(m < 0) {
-	  m = -m;
-	}
-	m = m - (uip_connr->sv >> 2);
-	uip_connr->sv += m;
-	uip_connr->rto = (uip_connr->sa >> 3) + uip_connr->sv;
-
+	uip_rtt_update(uip_connr);
       }
       /* Set the acknowledged flag. */
       uip_flags = UIP_ACKDATA;
