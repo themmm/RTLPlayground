@@ -59,7 +59,7 @@ void syslog_stop(void) __banked
 
 void syslog_callback(uint16_t lport) __banked
 {
-	uint16_t syslog_hdr;
+	static __xdata uint16_t syslog_hdr;	// static: would take direct RAM (#386)
 	if (!state.syslog_conn || lport != state.syslog_conn->lport)
 		return;
 
