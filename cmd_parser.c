@@ -1632,11 +1632,29 @@ err:
 
 static __code const char * __code const storm_types[STORM_TYPES] = { "bcast", "mcast", "ucast", "umcast" };
 
+/* Reads the decimal rate of the storm command, at most 9 digits, into
+ * storm_rate. A function of its own that calls nothing, so the 32-bit
+ * arithmetic gets overlaid scratch space instead of direct RAM for good.
+ * Returns 0 on a character that is not a digit. */
+static __xdata uint32_t storm_rate;
+
+static uint8_t parse_storm_rate(__xdata uint8_t *p)
+{
+	uint8_t d;
+
+	storm_rate = 0;
+	do {
+		d = *p++ - '0';
+		if (d > 9 || storm_rate > 99999999)
+			return 0;
+		storm_rate = (storm_rate << 3) + (storm_rate << 1) + d;
+	} while (*p != ' ' && *p != NUL);
+	return 1;
+}
+
 void parse_storm(void)
 {
-	uint8_t port, type, d;
-	__xdata uint32_t rate;
-	__xdata uint8_t *p;
+	uint8_t port, type;
 
 	if (cmd_words_len == 1)
 		return storm_show();
@@ -1655,23 +1673,17 @@ void parse_storm(void)
 	if (cmd_words_len != 5)
 		goto err;
 
-	rate = 0;
-	p = &cmd_buffer[cmd_words_b[3]];
-	do {
-		d = *p++ - '0';
-		if (d > 9 || rate > 99999999)
-			goto err;
-		rate = (rate << 3) + (rate << 1) + d;
-	} while (*p != ' ' && *p != NUL);
+	if (!parse_storm_rate(&cmd_buffer[cmd_words_b[3]]))
+		goto err;
 
 	if (cmd_compare(4, "pps")) {
-		if (!rate || rate > 0xfffff)
+		if (!storm_rate || storm_rate > 0xfffff)
 			goto err;
-		storm_set(port, type, rate, 1);
+		storm_set(port, type, storm_rate, 1);
 	} else if (cmd_compare(4, "kbps")) {
-		if (!rate || rate > 10000000)
+		if (!storm_rate || storm_rate > 10000000)
 			goto err;
-		storm_set(port, type, rate, 0);
+		storm_set(port, type, storm_rate, 0);
 	} else {
 		goto err;
 	}
