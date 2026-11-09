@@ -189,10 +189,10 @@ void uip_setipid(u16_t id) { ipid = id; }
 __xdata static u8_t iss[4];          /* The iss variable is used for the TCP
 				initial sequence number. */
 
-#if UIP_ACTIVE_OPEN
+#if UIP_ACTIVE_OPEN || UIP_UDP
 __xdata static u16_t lastport;       /* Keeps track of the last port used for
 				a new connection. */
-#endif /* UIP_ACTIVE_OPEN */
+#endif /* UIP_ACTIVE_OPEN || UIP_UDP */
 
 /* Temporary variables. */
 __xdata u8_t uip_acc32[4];
@@ -391,9 +391,9 @@ uip_init(void) __banked
   for(uint8_t c = 0; c < UIP_CONNS; c++) {
     uip_conns[c].tcpstateflags = UIP_CLOSED;
   }
-#if UIP_ACTIVE_OPEN
+#if UIP_ACTIVE_OPEN || UIP_UDP
   lastport = 1024;
-#endif /* UIP_ACTIVE_OPEN */
+#endif /* UIP_ACTIVE_OPEN || UIP_UDP */
 
 #if UIP_UDP
   for(uint8_t c = 0; c < UIP_UDP_CONNS; c++) {
