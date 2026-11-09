@@ -209,16 +209,20 @@ void send_sfp_info(uint8_t sfp)
 }
 
 
-void sfp_send_data(uint8_t slot, uint8_t reg, uint8_t len)
+/* Slot and length of sfp_send_data() in xdata: as parameters, and as a
+ * local of send_status(), SDCC would keep them in direct RAM for good */
+static __xdata uint8_t sfp_slot, sfp_len;
+
+void sfp_send_data(uint8_t reg)
 {
 	// maximum supported transfer size is 16 bytes
-	if (len > 16)
+	if (sfp_len > 16)
 		return;
 
-	if (!sfp_read_block(slot, reg, len))
+	if (!sfp_read_block(sfp_slot, reg, sfp_len))
 		return;
 
-	for (uint8_t i = 0; i < len; i++)
+	for (uint8_t i = 0; i < sfp_len; i++)
 		byte_to_html(sfp_buf[i]);
 }
 
@@ -834,50 +838,55 @@ void send_status(void)
 		slen += strtox(outbuf + slen, "\"");
 
 		if (machine.is_sfp[i]) {
-			uint8_t sfp = machine.is_sfp[i] - 1;
+			sfp_slot = machine.is_sfp[i] - 1;
 			slen += strtox(outbuf + slen, ",\"isSFP\":1,\"enabled\":");
-			if (!(sfp_pins_last & (0x1 << (sfp << 2)))) {
+			if (!(sfp_pins_last & (0x1 << (sfp_slot << 2)))) {
 				bool_to_html(1);
 				slen += strtox(outbuf + slen,",\"sfp_options\":\"0x");
-				byte_to_html(sfp_options[sfp]);
-				if (sfp_options[sfp] & 0x40) {
+				byte_to_html(sfp_options[sfp_slot]);
+				if (sfp_options[sfp_slot] & 0x40) {
+					sfp_len = 2;
 					slen += strtox(outbuf + slen,"\",\"sfp_temp\":\"0x");
-					sfp_send_data(sfp, 224, 2);
+					sfp_send_data(224);
 					slen += strtox(outbuf + slen,"\",\"sfp_vcc\":\"0x");
-					sfp_send_data(sfp, 226, 2);
+					sfp_send_data(226);
 					slen += strtox(outbuf + slen,"\",\"sfp_txbias\":\"0x");
-					sfp_send_data(sfp, 228, 2);
+					sfp_send_data(228);
 					slen += strtox(outbuf + slen,"\",\"sfp_txpower\":\"0x");
-					sfp_send_data(sfp, 230, 2);
+					sfp_send_data(230);
 					slen += strtox(outbuf + slen,"\",\"sfp_rxpower\":\"0x");
-					sfp_send_data(sfp, 232, 2);
-					if (sfp_options[sfp] & 0x10) {
+					sfp_send_data(232);
+					if (sfp_options[sfp_slot] & 0x10) {
+						sfp_len = 4;
 						slen += strtox(outbuf + slen,"\",\"sfp_temp_cal\":\"0x");
-						sfp_send_data(sfp, 212, 4);
+						sfp_send_data(212);
 						slen += strtox(outbuf + slen,"\",\"sfp_vcc_cal\":\"0x");
-						sfp_send_data(sfp, 216, 4);
+						sfp_send_data(216);
 						slen += strtox(outbuf + slen,"\",\"sfp_txbias_cal\":\"0x");
-						sfp_send_data(sfp, 204, 4);
+						sfp_send_data(204);
 						slen += strtox(outbuf + slen,"\",\"sfp_txpower_cal\":\"0x");
-						sfp_send_data(sfp, 208, 4);
+						sfp_send_data(208);
 						slen += strtox(outbuf + slen,"\",\"sfp_rxpower_cal\":\"0x");
-						sfp_send_data(sfp, 184, 16);
-						sfp_send_data(sfp, 200, 4);
+						sfp_len = 16;
+						sfp_send_data(184);
+						sfp_len = 4;
+						sfp_send_data(200);
 					}
 					slen += strtox(outbuf + slen,"\",\"sfp_state\":\"0x");
-					sfp_send_data(sfp, 238, 1);
+					sfp_len = 1;
+					sfp_send_data(238);
 				}
 				slen += strtox(outbuf + slen,"\",\"sfp_vendor\":\"");
-				str_x_to_html(sfp_module_vendor[sfp]);
+				str_x_to_html(sfp_module_vendor[sfp_slot]);
 				slen += strtox(outbuf + slen,"\",\"sfp_model\":\"");
-				str_x_to_html(sfp_module_model[sfp]);
+				str_x_to_html(sfp_module_model[sfp_slot]);
 				slen += strtox(outbuf + slen,"\",\"sfp_serial\":\"");
-				str_x_to_html(sfp_module_serial[sfp]);
+				str_x_to_html(sfp_module_serial[sfp_slot]);
 				slen += strtox(outbuf + slen,"\",\"sfp_los\":");
-				if (machine.sfp_port[sfp].pin_los == GPIO_NA) {
+				if (machine.sfp_port[sfp_slot].pin_los == GPIO_NA) {
 					slen += strtox(outbuf + slen,"null");
 				} else {
-					bool_to_html(sfp_pins_last & (0x2 << (sfp << 2)));
+					bool_to_html(sfp_pins_last & (0x2 << (sfp_slot << 2)));
 				}
 			} else {
 				bool_to_html(0);
