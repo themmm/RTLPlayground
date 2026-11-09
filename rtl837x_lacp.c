@@ -475,7 +475,8 @@ void lacp_lag_set(__xdata uint8_t lag, __xdata uint16_t ports) __banked
 	if (ports && !lacp_scratch_flag)
 		lacp_engine_on();
 
-	for (uint8_t i = MACHINE_MIN_PORT; i <= MACHINE_MAX_PORT; i++) {
+	static __xdata uint8_t i;	// static: would take direct RAM (#386)
+	for (i = MACHINE_MIN_PORT; i <= MACHINE_MAX_PORT; i++) {
 		if (!(ports & PORT_BIT(i)))
 			continue;
 		lacp_scratch_lag = lacp_port_lag[i];
