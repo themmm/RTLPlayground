@@ -442,7 +442,7 @@ void phy_set_duplex(void) __banked
 }
 
 
-void phy_show(uint8_t port) __banked
+void phy_show(__xdata uint8_t port) __banked
 {
 	uint16_t v;
 
