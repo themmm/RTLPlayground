@@ -288,10 +288,17 @@ forward:
  * record, and passes over the others. A record that does not end within the
  * IP packet ends the walk.
  */
+// A 16-bit field of the packet in network order; calls nothing, so its
+// scratch space is overlaid instead of taken from internal RAM for good
+static uint16_t igmp_u16(uint16_t ofs)
+{
+	return ((uint16_t)uip_buf[ofs] << 8) | uip_buf[ofs + 1];
+}
+
 static void igmp_v3_report(void)
 {
 	// In XRAM: this function calls on, so its locals would take internal RAM from the stack
-	__xdata uint16_t records = ((uint16_t)uip_buf[igmp_grp + IGMP_V3_NREC_OFS] << 8) | uip_buf[igmp_grp + IGMP_V3_NREC_OFS + 1];
+	__xdata uint16_t records = igmp_u16(igmp_grp + IGMP_V3_NREC_OFS);
 	__xdata uint16_t last = IGMP_IP_HDR + HTONS(IGMP_I->len);  // Not the frame: it may be padded
 	__xdata uint16_t left, words;
 	__xdata uint8_t type;
@@ -306,7 +313,7 @@ static void igmp_v3_report(void)
 		// Sources and aux data are 32-bit words and have to end within the packet;
 		// the sources are checked before the aux length is added, so the sum cannot wrap
 		left = (last - igmp_grp) >> 2;
-		words = ((uint16_t)uip_buf[igmp_grp + IGMP_V3_NSRC_OFS] << 8) | uip_buf[igmp_grp + IGMP_V3_NSRC_OFS + 1];
+		words = igmp_u16(igmp_grp + IGMP_V3_NSRC_OFS);
 		if (words > left)
 			return;
 		words += uip_buf[igmp_grp + IGMP_V3_AUXLEN_OFS];
