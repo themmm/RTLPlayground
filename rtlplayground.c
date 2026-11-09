@@ -1044,8 +1044,11 @@ bool gpio_pin_test(uint8_t pin)
 
 void flash_default_config(void)
 {
-	__xdata uint32_t source = DEFAULT_CONFIG_START;
-	__xdata uint32_t dest = CONFIG_START;
+	// #386: needs static, otherwise SDCC spills them to direct RAM
+	static __xdata uint32_t source, dest;
+
+	source = DEFAULT_CONFIG_START;
+	dest = CONFIG_START;
 
 	flash_region.addr = CONFIG_START;
 	flash_sector_erase();
