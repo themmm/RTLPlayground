@@ -50,7 +50,7 @@
 
 extern volatile __xdata uint32_t ticks;
 
-static clock_time_t clock_time(void)
+static inline clock_time_t clock_time(void)
 {
   clock_time_t t;
 
