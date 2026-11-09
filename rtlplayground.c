@@ -646,7 +646,7 @@ void reg_write_m(uint16_t reg_addr)
 /*
  * This sets a bit in the 32bit wide switch register reg_addr
  */
-void reg_bit_set(uint16_t reg_addr, char bit)
+void reg_bit_set(uint16_t reg_addr, __xdata char bit)
 {
 	uint8_t bit_mask = 1 << (bit & 0x7);
 
@@ -660,7 +660,7 @@ void reg_bit_set(uint16_t reg_addr, char bit)
 /*
  * This sets a bit in the 32bit wide switch register reg_addr
  */
-void reg_bit_clear(uint16_t reg_addr, char bit)
+void reg_bit_clear(uint16_t reg_addr, __xdata char bit)
 {
 	uint8_t bit_mask = 1 << (bit & 0x7);
 
@@ -675,7 +675,7 @@ void reg_bit_clear(uint16_t reg_addr, char bit)
 /*
  * This tests a bit in the 32bit wide switch register reg_addr
  */
-uint8_t reg_bit_test(uint16_t reg_addr, char bit)
+uint8_t reg_bit_test(uint16_t reg_addr, __xdata char bit)
 {
 	uint8_t bit_mask = 1 << (bit & 0x7);
 
