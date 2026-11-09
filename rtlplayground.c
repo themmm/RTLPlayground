@@ -1484,11 +1484,12 @@ void check_and_flash_update_image(void)
 	if (flash_buf[0] == 0x00 && flash_buf[1] == 0x40)
 	{
 		// Yes, flash the new image to the start of flash and reset
-		__xdata uint32_t dest = 0x0;
-		__xdata uint32_t source = FIRMWARE_UPLOAD_START;
-		__xdata uint16_t i = 0;
-		__xdata uint16_t j = 0;
+		// #386: needs static, otherwise SDCC spills them to direct RAM
+		static __xdata uint32_t dest, source;
+		static __xdata uint16_t i, j;
 		__xdata uint8_t * __xdata bptr;
+		dest = 0x0;
+		source = FIRMWARE_UPLOAD_START;
 		print_string("found update image!\nChecking integrity");
 		flash_init(0); // Re-initialize flash for non-DIO operation, otherwise flashing will fail
 		set_sys_led_state(SYS_LED_FAST);
