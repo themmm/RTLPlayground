@@ -749,7 +749,7 @@ static uint16_t request_header_take(void)
 	return 0;
 }
 
-void handle_post(uint16_t body_off)
+void handle_post(__xdata uint16_t body_off)
 {
 	__xdata struct httpd_state * __xdata s = &(uip_conn->appstate);
 	__xdata uint8_t *p = uip_appdata;
