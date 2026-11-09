@@ -984,7 +984,7 @@ static void stp_rapid_rx(uint8_t port) __reentrant
 
 void stp_in(void) __banked
 {
-	uint8_t port;
+	static __xdata uint8_t port;	// static: would take direct RAM
 
 	stp_rxbody = TRAP_RX_BODY();
 	if (uip_len < stp_rxbody + BPDU_LEN_MIN_BODY) {
