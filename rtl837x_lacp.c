@@ -451,7 +451,7 @@ void lacp_init(void) __banked
 	lacpEnabled = 0;
 }
 
-void lacp_lag_set(uint8_t lag, __xdata uint16_t ports) __banked
+void lacp_lag_set(__xdata uint8_t lag, __xdata uint16_t ports) __banked
 {
 	if (lag >= LACP_NUM_LAGS)
 		return;
