@@ -665,6 +665,14 @@ static void stp_reroot_tree(void) __reentrant
 }
 
 
+/* Root path cost through port i. A function of its own that calls nothing,
+ * so the 32-bit sum gets overlaid scratch space instead of direct RAM. */
+static void stp_rpcost_set(uint8_t i)
+{
+	stp_rpcost[i] = stp_dcost[i] + PCOST(i);
+}
+
+
 static void stp_reselect(void)
 {
 	stp_self.prio = stp_prio;
@@ -683,7 +691,7 @@ static void stp_reselect(void)
 			continue;
 		if (cmpBytes((__xdata uint8_t *)&stp_droot[stp_j], (__xdata uint8_t *)&stp_self, 8) >= 0)
 			continue;
-		stp_rpcost[stp_j] = stp_dcost[stp_j] + PCOST(stp_j);
+		stp_rpcost_set(stp_j);
 		if (stp_best == 0xff || stp_cmp_root_path(stp_j, stp_best) < 0)
 			stp_best = stp_j;
 	}
