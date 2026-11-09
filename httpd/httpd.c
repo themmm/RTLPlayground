@@ -440,6 +440,20 @@ __xdata struct {
 } upload_settings;
 
 /*
+ * Writes len bytes of flash_buf at uptr, and moves uptr on if advance is
+ * set. A function of its own so that stream_upload() needs no spill space
+ * in direct RAM for the 32-bit address.
+ */
+static void upload_write(uint16_t len, __xdata bool advance)
+{
+	flash_region.addr = uptr;
+	flash_region.len = len;
+	flash_write_bytes(flash_buf);
+	if (advance)
+		uptr += len;
+}
+
+/*
  * Reads post data from the http stream and writes it into flash memory
  * Input: upload_settings, set by the caller
  * Returns 1: More data to read, 0: Upload complete, all parts reads
@@ -460,10 +474,7 @@ uint8_t stream_upload(void)
 		if (!boundary[bindex]) {
 			s->tstate = TSTATE_NONE;
 			dbg_string("len 2: "); dbg_short(write_len); dbg_char(' ');
-			flash_region.addr = uptr;
-			flash_region.len = write_len;
-			flash_write_bytes(flash_buf);
-			uptr += write_len;
+			upload_write(write_len, true);
 			write_len = 0;
 			if (verify_crc) {
 				dbg_string("CRC16: "); dbg_short(crc_final); dbg_char('\n');
@@ -486,9 +497,7 @@ uint8_t stream_upload(void)
 			}
 			// Make sure there is a 0 at the end of the uploaded data
 			flash_buf[0] = 0;
-			flash_region.addr = uptr;
-			flash_region.len = 1;
-			flash_write_bytes(flash_buf);
+			upload_write(1, false);
 			if (upload_settings.bptr >= upload_settings.plen)
 				return 0;
 			return 1;
@@ -528,10 +537,7 @@ uint8_t stream_upload(void)
 					flash_region.addr = uptr;
 					flash_sector_erase();
 				}
-				flash_region.addr = uptr;
-				flash_region.len = FLASH_PAGE_SIZE;
-				flash_write_bytes(flash_buf);
-				uptr += FLASH_PAGE_SIZE;
+				upload_write(FLASH_PAGE_SIZE, true);
 				write_len -= FLASH_PAGE_SIZE;
 
 				// Copy the remaining byte for the next page to the beginning of the buffer.
