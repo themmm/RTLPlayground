@@ -1,3 +1,8 @@
+> [!NOTE]
+> This is the `keeplink` branch of a fork for one switch, the keepLiNK KP-9000-9XHPML-X V1.2,
+> with PoE for its RTL8238C. What it adds to RTLPlayground, its versions and how to build it are in
+> [KEEPLINK.md](KEEPLINK.md). The rest of this README is upstream's.
+
 # RTLPlayground
 A Playground for Firmware development for advanced user of RTL8372/RTL8373 based 2.5GBit Switches.
 
