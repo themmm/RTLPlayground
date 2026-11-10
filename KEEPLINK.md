@@ -23,10 +23,10 @@ The other machines still build from `keeplink`, but our commits are tested on th
   reports and leaves to the ports with a querier, as RFC 4541 recommends; every group record of an
   IGMPv3 report is learnt; IGMP with an 802.1Q tag is handled within its VLAN.
 - **Less internal RAM**: small commits move locals and arguments out of the 8051's internal RAM.
-  The stack has 220 B instead of 144 B (see [doc/health.md](doc/health.md) for the stack check).
+  In `v0.1.0-kl.1` the stack has 220 B instead of 144 B (see [doc/health.md](doc/health.md) for the stack check).
 - **Fixes**, e.g. the OEM installer sums the whole first payload segment.
 
-Each commit says what it costs in code and memory.
+Each commit that adds code says what it costs in code and memory.
 
 ## Versions
 
