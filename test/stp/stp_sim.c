@@ -2490,6 +2490,31 @@ static void scen_port_id_panel(void)
 	check_state(6, 1, "its BPDU coming back on another port blocks chip port 6");
 }
 
+static void scen_no_link_no_forwarding(void)
+{
+	printf("67. a port without link waits for its link before it can forward\n");
+	reset_all();
+	secs(3);
+	check_state(0, 1, "port 1, without link since STP came on, stays discarding");
+	check_state(1, 1, "so does port 2");
+	sim_cmd("stp port 3 off");
+	sim_cmd("stp port 3 on");
+	secs(5);
+	check_state(2, 1, "port 3, switched back on without link, stays discarding");
+	links_set((1 << 0) | (1 << 1));
+	tick(1);
+	check(port_state(0) != 3 && port_state(1) != 3,
+	      "a cable from port 1 to port 2 finds neither forwarding before the next link check");
+	secs(1);
+	check_state(0, 1, "after the link check port 1 is discarding");
+	check_state(1, 1, "and so is port 2");
+	links_set((1 << 0) | (1 << 1) | (1 << 2));
+	secs(1);
+	check_state(2, 1, "a host plugged into port 3 finds it discarding");
+	secs(3);
+	check_state(2, 3, "and its link starts the listen period: edge forwarding after 3 s");
+}
+
 int main(int argc, char **argv)
 {
 	verbose = argc > 1 && argv[1][0] == '-' ? (argv[1][1] == 'd' ? 2 : 1) : 0;
@@ -2558,6 +2583,7 @@ int main(int argc, char **argv)
 	scen_loop_peer_autoedge_off();
 	scen_mikrotik_wire_capture();
 	scen_port_id_panel();
+	scen_no_link_no_forwarding();
 	if (failures) {
 		printf("\n%d check(s) failed\n", failures);
 		return 1;

@@ -1183,7 +1183,11 @@ static void stp_ent_reset(uint8_t e) __reentrant
 		stp_state_set(e, 0b11);
 	} else {
 		stp_state_set(e, 0b01);
-		port_timers[e] = FWD_TICKS;
+		/* Without link the port waits blocked for its carrier, as after a
+		 * link down: the link-up in stp_timers() starts its listen period.
+		 * Starting it here would let auto edge open a port nobody is on. */
+		if (stp_link_now & stp_ent_bit)
+			port_timers[e] = FWD_TICKS;
 	}
 }
 
