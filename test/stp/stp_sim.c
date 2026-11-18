@@ -2515,6 +2515,31 @@ static void scen_no_link_no_forwarding(void)
 	check_state(2, 3, "and its link starts the listen period: edge forwarding after 3 s");
 }
 
+static void scen_admin_edge_link_up(void)
+{
+	struct sim_bpdu r;
+	uint16_t tc;
+
+	printf("68. an edge port forwards as soon as its link comes up\n");
+	reset_all();
+	sim_cmd("stp port 4 edge on");
+	tc = stp_tc_count;
+	links_set(1 << 3);
+	secs(1);
+	check_state(3, 3, "port 4 with edge on forwards with the first link check");
+	check(stp_pflags[3] & STP_PF_OPEREDGE, "as an edge port");
+	links_set(0);
+	secs(1);
+	links_set(1 << 3);
+	secs(1);
+	check_state(3, 3, "and again at once when its link comes back");
+	secs(40);
+	check(stp_tc_count == tc, "its link coming and going raises no topology change");
+	r = root_on(3);
+	bpdu_in(&r);
+	check(!(stp_pflags[3] & STP_PF_OPEREDGE), "a BPDU still takes the edge away");
+}
+
 int main(int argc, char **argv)
 {
 	verbose = argc > 1 && argv[1][0] == '-' ? (argv[1][1] == 'd' ? 2 : 1) : 0;
@@ -2584,6 +2609,7 @@ int main(int argc, char **argv)
 	scen_mikrotik_wire_capture();
 	scen_port_id_panel();
 	scen_no_link_no_forwarding();
+	scen_admin_edge_link_up();
 	if (failures) {
 		printf("\n%d check(s) failed\n", failures);
 		return 1;
