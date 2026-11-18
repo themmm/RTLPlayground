@@ -1227,9 +1227,17 @@ void stp_timers(void) __banked
 				if ((stp_link_now >> stp_i) & 1) {
 					/* Carrier back: re-run the listen period rather than
 					 * forwarding straight away - the segment may have been
-					 * rewired while we were down. Auto edge still applies. */
-					port_timers[stp_i] = FWD_TICKS;
-					stp_pflags[stp_i] &= ~STP_PF_OPEREDGE;
+					 * rewired while we were down. Auto edge still applies.
+					 * An admin edge port forwards at once, as at "stp on";
+					 * a BPDU still takes its edge away. */
+					if (stp_pflags[stp_i] & STP_PF_ADMEDGE) {
+						port_timers[stp_i] = 0;
+						stp_pflags[stp_i] |= STP_PF_OPEREDGE;
+						stp_state_set(stp_i, STP_FORWARDING);
+					} else {
+						port_timers[stp_i] = FWD_TICKS;
+						stp_pflags[stp_i] &= ~STP_PF_OPEREDGE;
+					}
 					stp_alt &= ~((uint16_t)1 << stp_i);
 					stp_bpdu_age[stp_i] = 0;
 					stp_newinfo |= (uint16_t)1 << stp_i;
